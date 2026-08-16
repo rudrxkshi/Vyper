@@ -43,6 +43,11 @@ def _sanitize_log_json(status: int, description: str = "") -> str:
     return json.dumps({"nvme0n1": {"sstat": {"status": f"({status}) {description}"}}})
 
 
+def _sanitize_log_json_with_flags(status: int, *, global_data_erased: bool = False, description: str = "") -> str:
+    sstat_value = status | (0x100 if global_data_erased else 0)
+    return json.dumps({"nvme0n1": {"sstat": {"status": f"({sstat_value}) {description}"}}})
+
+
 def test_hdd_rejected():
     pathway = NVMeSanitizePathway(dry_run=True)
     profile = _nvme_profile(device_type="HDD", device_path="/dev/sda")
@@ -287,7 +292,7 @@ def test_malformed_sanitize_log_output():
 def test_destructive_command_goes_through_command_executor():
     executor = RecordingExecutor([
         CommandResult(command=["nvme", "sanitize", "/dev/nvme0n1", "-a", "4"], success=True, exit_code=0, stdout="sanitize submitted", stderr="", dry_run=False, metadata={}),
-        CommandResult(command=["nvme", "sanitize-log", "/dev/nvme0n1"], success=True, exit_code=0, stdout="status: completed", stderr="", dry_run=False, metadata={}),
+        CommandResult(command=["nvme", "sanitize-log", "/dev/nvme0n1", "--output-format=json"], success=True, exit_code=0, stdout=_sanitize_log_json_with_flags(1, global_data_erased=True, description="Completed Successfully"), stderr="", dry_run=False, metadata={}),
     ])
     pathway = NVMeSanitizePathway(dry_run=False, command_executor=executor, timeout=5)
     profile = _nvme_profile()
@@ -302,7 +307,7 @@ def test_destructive_command_goes_through_command_executor():
 def test_no_generic_host_overwrite_is_executed():
     executor = RecordingExecutor([
         CommandResult(command=["nvme", "sanitize", "/dev/nvme0n1", "-a", "4"], success=True, exit_code=0, stdout="sanitize submitted", stderr="", dry_run=False, metadata={}),
-        CommandResult(command=["nvme", "sanitize-log", "/dev/nvme0n1"], success=True, exit_code=0, stdout="status: completed", stderr="", dry_run=False, metadata={}),
+        CommandResult(command=["nvme", "sanitize-log", "/dev/nvme0n1", "--output-format=json"], success=True, exit_code=0, stdout=_sanitize_log_json_with_flags(1, global_data_erased=True, description="Completed Successfully"), stderr="", dry_run=False, metadata={}),
     ])
     pathway = NVMeSanitizePathway(dry_run=False, command_executor=executor, timeout=5)
     profile = _nvme_profile()

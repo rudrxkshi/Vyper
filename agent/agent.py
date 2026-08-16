@@ -49,8 +49,8 @@ class VYPERAgent:
         self.evidence_collector = evidence_collector or EvidenceCollector(dry_run=dry_run, agent_version="vyper-agent")
         self.certificate_builder = certificate_builder or CertificateBuilder()
 
-    def sanitize_device(self, target: str, authorization: Any, dry_run: bool = False) -> OrchestrationJobResult:
-        effective_dry_run = bool(dry_run)
+    def sanitize_device(self, target: str, authorization: Any, dry_run: bool | None = None) -> OrchestrationJobResult:
+        effective_dry_run = self.dry_run if dry_run is None else bool(dry_run)
         state_history: list[JobState] = [JobState.PENDING]
         now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 

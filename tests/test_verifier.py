@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -62,6 +63,11 @@ def _nvme_profile(**kwargs):
     }
     defaults.update(kwargs)
     return DeviceProfile(**defaults)
+
+
+def _sanitize_log_json(status: int, description: str = "", *, global_data_erased: bool = False) -> str:
+    sstat_value = status | (0x100 if global_data_erased else 0)
+    return json.dumps({"nvme0n1": {"sstat": {"status": f"({sstat_value}) {description}"}}})
 
 
 def test_hdd_overwrite_sampled_zeros_are_verified():
@@ -210,7 +216,7 @@ def test_ata_verification_malformed_output_is_inconclusive():
 def test_nvme_sanitize_completed_is_verified():
     class Executor:
         def run(self, command, timeout=None, cwd=None):
-            return SimpleNamespace(success=True, exit_code=0, stdout="status: completed", stderr="", dry_run=False, metadata={})
+            return SimpleNamespace(success=True, exit_code=0, stdout=_sanitize_log_json(1, "Completed Successfully", global_data_erased=True), stderr="", dry_run=False, metadata={})
 
     verifier = Verifier(command_executor=Executor())
     profile = _nvme_profile()
@@ -219,13 +225,13 @@ def test_nvme_sanitize_completed_is_verified():
 
     assert result.status == SanitizationStatus.VERIFIED
     assert result.verified is True
-    assert result.evidence["status"] == "completed"
+    assert result.evidence["status"] == "COMPLETED"
 
 
 def test_nvme_sanitize_in_progress_is_inconclusive():
     class Executor:
         def run(self, command, timeout=None, cwd=None):
-            return SimpleNamespace(success=True, exit_code=0, stdout="status: in progress (25%)", stderr="", dry_run=False, metadata={})
+            return SimpleNamespace(success=True, exit_code=0, stdout=_sanitize_log_json(2, "In Progress"), stderr="", dry_run=False, metadata={})
 
     verifier = Verifier(command_executor=Executor())
     profile = _nvme_profile()
@@ -239,7 +245,7 @@ def test_nvme_sanitize_in_progress_is_inconclusive():
 def test_nvme_sanitize_failed_is_failed():
     class Executor:
         def run(self, command, timeout=None, cwd=None):
-            return SimpleNamespace(success=True, exit_code=0, stdout="status: failed", stderr="", dry_run=False, metadata={})
+            return SimpleNamespace(success=True, exit_code=0, stdout=_sanitize_log_json(3, "Failed"), stderr="", dry_run=False, metadata={})
 
     verifier = Verifier(command_executor=Executor())
     profile = _nvme_profile()
@@ -252,7 +258,7 @@ def test_nvme_sanitize_failed_is_failed():
 def test_nvme_sanitize_aborted_is_failed():
     class Executor:
         def run(self, command, timeout=None, cwd=None):
-            return SimpleNamespace(success=True, exit_code=0, stdout="status: aborted", stderr="", dry_run=False, metadata={})
+            return SimpleNamespace(success=True, exit_code=0, stdout=_sanitize_log_json(3, "Abort requested"), stderr="", dry_run=False, metadata={})
 
     verifier = Verifier(command_executor=Executor())
     profile = _nvme_profile()
@@ -335,7 +341,7 @@ def test_verifier_uses_command_executor_for_read_only_commands():
 
 def test_supported_route_is_routed_correctly():
     executor = RecordingExecutor([
-        SimpleNamespace(success=True, exit_code=0, stdout="status: completed", stderr="", dry_run=False, metadata={}),
+        SimpleNamespace(success=True, exit_code=0, stdout=_sanitize_log_json(1, "Completed Successfully", global_data_erased=True), stderr="", dry_run=False, metadata={}),
     ])
     verifier = Verifier(command_executor=executor)
     profile = _nvme_profile()

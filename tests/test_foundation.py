@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from agent.common import (
@@ -68,7 +70,7 @@ def test_dry_run_command_executor_does_not_execute_real_commands():
 
 def test_subprocess_command_executor_wraps_exit_status():
     executor = SubprocessCommandExecutor()
-    result = executor.run(["python", "-c", "print('ok')"], timeout=5)
+    result = executor.run([sys.executable, "-c", "print('ok')"], timeout=5)
 
     assert result.success is True
     assert result.exit_code == 0

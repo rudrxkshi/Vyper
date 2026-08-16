@@ -247,6 +247,20 @@ def test_dry_run_never_destructive():
     assert calls and calls[0][1]["authorized"] is True
 
 
+def test_agent_default_dry_run_is_inherited_when_not_overridden():
+    calls = []
+    profiler = StubProfiler(profile_result=_profile("HDD"))
+    policy = StubPolicyEngine(decision=_decision("HDD_OVERWRITE", "HDD"))
+    verifier = StubVerifier(result=_verification(SanitizationStatus.INCONCLUSIVE, False))
+    agent = VYPERAgent(dry_run=True, profiler=profiler, policy_engine=policy, verifier=verifier)
+    agent._resolve_pathway = lambda pathway_name, dry_run: DummyPathway(_execution_result(SanitizationStatus.RUNNING, "HDD_OVERWRITE", dry_run=dry_run), calls)
+
+    result = agent.sanitize_device("/dev/sdx", authorization={"approved": False})
+
+    assert result.execution is not None and result.execution.dry_run is True
+    assert calls and calls[0][1]["authorized"] is True
+
+
 def test_system_associated_device_rejected():
     profile = _profile("HDD")
     profile.is_system_device = True
