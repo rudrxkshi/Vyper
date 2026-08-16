@@ -419,12 +419,12 @@ export default function VyperDashboard() {
     if (q && !a.model.toLowerCase().includes(q) && !a.serial_number.toLowerCase().includes(q)) return false;
     return true;
   });
-  const selectedAsset = assets.find((a) => a.id === selectedAssetId) || assets[0];
+  const selectedAsset = assets.find((a) => a.id === selectedAssetId) || null;
  
   const filteredJobs = jobs.filter((j) => jobStateFilter === "All" || j.job_state === jobStateFilter);
   const selectedJob = jobs.find((j) => j.id === selectedJobId) || jobs[0];
  
-  const selectedCert = certs.find((c) => c.id === selectedCertId) || certs[0];
+  const selectedCert = certs.find((c) => c.id === selectedCertId) || certs[0] || null;
  
   const filteredAuditLogs = auditLogs.filter((l) => {
     if (auditAction !== "All" && l.action !== auditAction) return false;
@@ -684,14 +684,51 @@ export default function VyperDashboard() {
  
                 <div className="nb-card">
                   <div className="nb-section-title">Asset detail <span className="nb-hint">read-only</span></div>
-                  <div className="nb-detail-row"><div className="k">device_path</div><div className="v">{selectedAsset.device_path}</div></div>
-                  <div className="nb-detail-row"><div className="k">device_type</div><div className="v">{selectedAsset.device_type}</div></div>
-                  <div className="nb-detail-row"><div className="k">serial_number</div><div className="v">{selectedAsset.serial_number}</div></div>
-                  <div className="nb-detail-row"><div className="k">is_system_device</div><div className="v">{String(selectedAsset.is_system_device)}</div></div>
-                  <div className="nb-detail-row"><div className="k">mounted</div><div className="v">{String(selectedAsset.mounted)}</div></div>
-                  <div className="nb-detail-row"><div className="k">mounted_partitions</div><div className="v">{selectedAsset.mounted_partitions.join(", ") || "—"}</div></div>
-                  {selectedAsset.is_system_device && (
-                    <div className="nb-callout" style={{ marginTop: 12 }}><b>Blocked:</b> system-associated device. Destructive jobs cannot target this asset.</div>
+
+                  {selectedAsset ? (
+                    <>
+                      <div className="nb-detail-row">
+                        <div className="k">device_path</div>
+                        <div className="v">{selectedAsset.device_path}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">device_type</div>
+                        <div className="v">{selectedAsset.device_type}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">serial_number</div>
+                        <div className="v">{selectedAsset.serial_number}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">is_system_device</div>
+                        <div className="v">{String(selectedAsset.is_system_device)}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">mounted</div>
+                        <div className="v">{String(selectedAsset.mounted)}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">mounted_partitions</div>
+                        <div className="v">
+                          {selectedAsset.mounted_partitions.join(", ") || "—"}
+                        </div>
+                      </div>
+
+                      {selectedAsset.is_system_device && (
+                        <div className="nb-callout" style={{ marginTop: 12 }}>
+                          <b>Blocked:</b> system-associated device. Destructive jobs cannot target this asset.
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="nb-callout">
+                      <b>No assets available.</b> The backend returned no devices.
+                    </div>
                   )}
                 </div>
               </div>
@@ -837,30 +874,92 @@ export default function VyperDashboard() {
                   <table>
                     <thead><tr><th>Certificate</th><th>Target</th><th>Outcome</th><th>Claim</th></tr></thead>
                     <tbody>
-                      {certs.map((c) => (
-                        <tr key={c.id} className="nb-row" onClick={() => setSelectedCertId(c.id)}>
-                          <td className="nb-mono">{c.id}</td>
-                          <td className="nb-mono">{c.target}</td>
-                          <td><Badge tone={c.final_status === "SUCCESS" ? "ok" : "bad"}>{c.final_status}</Badge></td>
-                          <td>{c.claim ? "Successful" : "Not claimed"}</td>
+                      {certs.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={4}
+                            style={{ textAlign: "center", color: "#8A8878" }}
+                          >
+                            No certificates available.
+                          </td>
                         </tr>
-                      ))}
+                      ) : (
+                        certs.map((c) => (
+                          <tr
+                            key={c.id}
+                            className="nb-row"
+                            onClick={() => setSelectedCertId(c.id)}
+                          >
+                            <td className="nb-mono">{c.id}</td>
+                            <td className="nb-mono">{c.target}</td>
+                            <td>
+                              <Badge tone={c.final_status === "SUCCESS" ? "ok" : "bad"}>
+                                {c.final_status}
+                              </Badge>
+                            </td>
+                            <td>{c.claim ? "Successful" : "Not claimed"}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
-                <div className="nb-stamp-card">
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                    <ShieldCheck size={20} aria-hidden="true" />
-                    <span className="nb-heading" style={{ fontSize: 14 }}>Certificate detail</span>
+                {selectedCert ? (
+                  <div className="nb-stamp-card">
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                      <ShieldCheck size={20} aria-hidden="true" />
+                      <span className="nb-heading" style={{ fontSize: 14 }}>
+                        Certificate detail
+                      </span>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">certificate_id</div>
+                      <div className="v">{selectedCert.id}</div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">job_id</div>
+                      <div className="v">{selectedCert.job_id}</div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">target</div>
+                      <div className="v">{selectedCert.target}</div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">final_status</div>
+                      <div className="v">
+                        <Badge
+                          tone={selectedCert.final_status === "SUCCESS" ? "ok" : "bad"}
+                          stamp
+                        >
+                          {selectedCert.final_status}
+                        </Badge>
+                      </div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">successful_sanitization_claim</div>
+                      <div className="v">{String(selectedCert.claim)}</div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">certificate_hash</div>
+                      <div className="v">{selectedCert.hash}</div>
+                    </div>
+
+                    <JsonPanel
+                      title="certificate_json"
+                      json={'{\n  "standard": "' + selectedCert.standard + '",\n  "issued_at": "' + selectedCert.issued + '"\n}'}
+                    />
                   </div>
-                  <div className="nb-detail-row"><div className="k">certificate_id</div><div className="v">{selectedCert.id}</div></div>
-                  <div className="nb-detail-row"><div className="k">job_id</div><div className="v">{selectedCert.job_id}</div></div>
-                  <div className="nb-detail-row"><div className="k">target</div><div className="v">{selectedCert.target}</div></div>
-                  <div className="nb-detail-row"><div className="k">final_status</div><div className="v"><Badge tone={selectedCert.final_status === "SUCCESS" ? "ok" : "bad"} stamp>{selectedCert.final_status}</Badge></div></div>
-                  <div className="nb-detail-row"><div className="k">successful_sanitization_claim</div><div className="v">{String(selectedCert.claim)}</div></div>
-                  <div className="nb-detail-row"><div className="k">certificate_hash</div><div className="v">{selectedCert.hash}</div></div>
-                  <JsonPanel title="certificate_json" json={'{\n  "standard": "' + selectedCert.standard + '",\n  "issued_at": "' + selectedCert.issued + '"\n}'} />
-                </div>
+                ) : (
+                  <div className="nb-callout">
+                    <b>No certificates available.</b> The backend returned no certificates.
+                  </div>
+                )}
               </div>
             </>
           )}
