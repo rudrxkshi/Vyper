@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from .agent_gateway import build_agent_gateway
 from .db import create_engine_and_session_factory, init_db
@@ -41,6 +42,13 @@ def create_app(*, database_url: str | None = None, agent_gateway=None) -> FastAP
 		yield
 
 	app = FastAPI(title="VYPER API", version="0.1.0", lifespan=lifespan)
+	app.add_middleware(
+		CORSMiddleware,
+		allow_origins=["*"],
+		allow_credentials=True,
+		allow_methods=["*"],
+		allow_headers=["*"],
+	)
 
 	@app.get("/health", tags=["health"])
 	def health() -> dict[str, str]:
