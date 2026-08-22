@@ -50,7 +50,7 @@ class DeviceProfiler:
 
         sysfs_block_dir = self.sysfs_root / "class" / "block" / device_name
         profile.model = self._read_file(sysfs_block_dir / "device" / "model") or self._read_file(sysfs_block_dir / "model")
-        profile.serial_number = self._read_file(sysfs_block_dir / "device" / "serial") or self._read_file(sysfs_block_dir / "serial")
+        profile.serial_number = ( self._read_file(sysfs_block_dir / "device" / "serial") or self._read_file(sysfs_block_dir / "serial") or self._serial_from_lsblk(device_path) )
         profile.size_bytes = self._read_size_bytes(sysfs_block_dir)
         profile.rotational = self._read_rotational(sysfs_block_dir)
         profile.transport = self._read_file(sysfs_block_dir / "device" / "transport") or self._read_file(sysfs_block_dir / "transport")
@@ -96,6 +96,22 @@ class DeviceProfiler:
             value = path.read_text(encoding="utf-8", errors="replace").strip()
             return value or None
         except OSError:
+            return None
+
+    def _serial_from_lsblk(self, device_path: str) -> str | None:
+        """Return the device serial reported by lsblk, if available."""
+        try:
+            result = self.command_executor.run(
+                ["lsblk", "-dn", "-o", "SERIAL", device_path]
+            )
+
+            if result.returncode != 0:
+                return None
+
+            serial = result.stdout.strip()
+            return serial or None
+
+        except Exception:
             return None
 
     def _read_size_bytes(self, sysfs_block_dir: Path) -> int | None:
