@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.central
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      VYPER_ENV: production
+      VYPER_DATABASE_URL_FILE: /run/secrets/central_database_url
+    secrets: [central_database_url]
+    depends_on:
+      postgres: {condition: service_healthy}
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.central
+    restart: unless-stopped
+    environment:
+      VYPER_ENV: production
+      VYPER_DATABASE_URL_FILE: /run/secrets/central_database_url
+      VYPER_CORS_ORIGINS: ${VYPER_CORS_ORIGINS:-}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    secrets: [central_database_url]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readiness')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  frontend:
+    build: frontend/user-dashboard
+    restart: unless-stopped
+  proxy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      VYPER_DOMAIN: ${VYPER_DOMAIN}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [backend, frontend]
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  central_database_url:
+    file: ./secrets/central_database_url
+volumes:
+  postgres_data:
+  caddy_data:

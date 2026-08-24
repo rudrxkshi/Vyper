@@ -1,0 +1,27 @@
+{
+  "architecture": "x86_64",
+  "bootable": false,
+  "build_kind": "non-bootable-test-fixture",
+  "built_at": "2026-08-24T00:00:00Z",
+  "contains_agent_credentials": false,
+  "contains_operator_secrets": false,
+  "execution_mode": "boot_sanitize",
+  "initramfs_filename": "initramfs.img",
+  "initramfs_sha256": "702d470c5f617788012aeb21d86a33afe6ecaf1b5791bcc5f9fd30854fc86d63",
+  "kernel_filename": "vmlinuz",
+  "kernel_sha256": "7c5710ad8d563e7344d0afea27b3b6397845eff66e4ae28e0a02a260ae0a4fad",
+  "platform": "linux",
+  "product": "VYPER Boot Sanitize Environment",
+  "required_components": [
+    "hdparm",
+    "nvme",
+    "lsblk",
+    "findmnt",
+    "swapon",
+    "pvs",
+    "local_agent",
+    "python"
+  ],
+  "secure_boot_compatible": false,
+  "version": "0.8.0-rc1"
+}

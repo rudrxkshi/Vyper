@@ -1,0 +1,26 @@
+{
+  "illustrative_only": true,
+  "job_id": "sample-engine-job",
+  "device": "/dev/disk/by-id/virtual-demo-disk",
+  "pathway": {
+    "selected_pathway": "HDD_OVERWRITE",
+    "executed_pathway": "HDD_OVERWRITE",
+    "sanitization_method": "HDD_OVERWRITE"
+  },
+  "execution": {
+    "status": "RUNNING",
+    "dry_run": false,
+    "metadata": {
+      "bytes_written": 5368709120,
+      "total_bytes": 5368709120
+    }
+  },
+  "verification": {
+    "status": "VERIFIED",
+    "verified": true,
+    "limitations": ["Representative reads do not cover hidden or remapped physical areas."]
+  },
+  "final_status": "VERIFIED",
+  "integrity_algorithm": "sha256",
+  "integrity_hash": "illustrative-not-a-valid-integrity-hash"
+}

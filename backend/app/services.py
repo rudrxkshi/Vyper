@@ -8,9 +8,51 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from agent.certificate import verify_certificate_integrity
+from agent.evidence import EvidenceCollector
 from agent.profiler import DeviceProfile
 
 from .models import AuditLogRecord, AssetRecord, CertificateRecord, JobRecord, ResultRecord
+from .security import record_audit_event
+
+
+class ResultIntegrityError(ValueError):
+	pass
+
+
+def validate_result_integrity(result: dict[str, Any]) -> tuple[bool, str | None]:
+	"""Validate successful claims and every supplied integrity hash."""
+	job_state = str(result.get("job_state") or result.get("terminal_state") or "")
+	verification = dict(to_payload(result.get("verification") or {}))
+	evidence = dict(to_payload(result.get("evidence") or {}))
+	certificate = dict(to_payload(result.get("certificate") or {}))
+	final_status = str(evidence.get("final_status") or result.get("final_status") or job_state)
+	evidence_hash = str(evidence.get("integrity_hash") or "")
+	certificate_hash = str(certificate.get("certificate_hash") or "")
+
+	if evidence_hash and not EvidenceCollector().verify_integrity(evidence):
+		return False, "Evidence integrity validation failed."
+	if certificate_hash and not verify_certificate_integrity(certificate):
+		return False, "Certificate integrity validation failed."
+	if evidence_hash and certificate_hash:
+		bound_hash = str((certificate.get("evidence_integrity") or {}).get("hash") or "")
+		if bound_hash != evidence_hash:
+			return False, "Certificate is not bound to the supplied evidence hash."
+
+	successful_claim = certificate.get("successful_sanitization_claim") is True
+	if final_status == "VERIFIED" or job_state == "VERIFIED" or successful_claim:
+		verified = (
+			job_state == "VERIFIED" and final_status == "VERIFIED"
+			and verification.get("status") == "VERIFIED" and verification.get("verified") is True
+			and evidence.get("final_status") == "VERIFIED"
+			and certificate.get("final_status") == "VERIFIED"
+			and certificate.get("outcome_kind") == "sanitization_certificate"
+			and successful_claim and bool(evidence_hash) and bool(certificate_hash)
+		)
+		if not verified:
+			return False, "VERIFIED requires matching verification, evidence, certificate, and integrity hashes."
+
+	return True, None
 
 
 def to_payload(value: Any) -> Any:
@@ -62,6 +104,9 @@ def persist_job(
     requested_dry_run: bool | None,
     actor: str | None = None,
 ) -> JobRecord:
+    integrity_ok, integrity_error = validate_result_integrity(result)
+    if not integrity_ok:
+        raise ResultIntegrityError(integrity_error or "Result integrity validation failed.")
     profile_payload = dict(to_payload(result.get("profile") or {}))
     policy_payload = dict(to_payload(result.get("policy") or {}))
     execution_payload = dict(to_payload(result.get("execution") or {}))
@@ -125,15 +170,11 @@ def persist_job(
         successful_sanitization_claim=successful_claim,
         certificate_json=certificate_payload,
     )
-    audit_row = AuditLogRecord(
-        id=str(uuid4()),
-        job=job,
-        action="sanitize_device",
-        actor=actor,
-        request_json={"target": result.get("target"), "authorization": sanitize_authorization_payload(authorization), "dry_run": requested_dry_run},
-        response_json={"job_state": job_state, "final_status": final_status, "certificate_id": certificate_id},
-    )
-    session.add_all([result_row, certificate_row, audit_row])
+    session.add_all([result_row, certificate_row])
+    record_audit_event(session, actor=actor, action="sanitize_device", resource=f"job:{job.id}", job_id=job.id,
+        metadata={"target": result.get("target"), "authorization": sanitize_authorization_payload(authorization),
+            "dry_run": requested_dry_run, "job_state": job_state, "final_status": final_status,
+            "certificate_id": certificate_id})
     return job
 
 
@@ -229,4 +270,8 @@ def audit_log_to_dict(audit_log: AuditLogRecord) -> dict[str, Any]:
         "request_json": audit_log.request_json or {},
         "response_json": audit_log.response_json or {},
         "created_at": audit_log.created_at,
+        "resource": audit_log.resource,
+        "request_id": audit_log.request_id,
+        "previous_hash": audit_log.previous_hash,
+        "event_hash": audit_log.event_hash,
     }

@@ -1,0 +1,27 @@
+[Unit]
+Description=VYPER privileged local storage agent
+After=local-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/vyper
+Environment=VYPER_CONFIG_PATH=/etc/vyper/config.toml
+Environment=VYPER_AGENT_CREDENTIAL_PATH=/etc/vyper/agent-identity.json
+Environment=VYPER_LOCAL_AGENT_DATABASE_PATH=/var/lib/vyper/local-jobs.db
+Environment=VYPER_EXECUTOR_DRY_RUN=false
+ExecStart=/opt/vyper/runtime/bin/vyper-local-agent
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/vyper /var/lib/vyper /var/log/vyper
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

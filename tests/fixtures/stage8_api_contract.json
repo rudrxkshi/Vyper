@@ -1,0 +1,33 @@
+{
+  "versions": {
+    "product": "0.8.0-rc1",
+    "local_api": "2",
+    "agent_protocol": "1"
+  },
+  "local_sanitize_request": {
+    "target": "/dev/sdb",
+    "authorization": {
+      "approved": true,
+      "ata_password": null
+    },
+    "dry_run": false
+  },
+  "central_job_create": {
+    "asset_id": "asset-system-1",
+    "dry_run": true,
+    "central_authorized": false,
+    "destructive_confirmation": null,
+    "idempotency_key": "stage8-contract-0001",
+    "expires_in_seconds": 3600,
+    "execution_mode": "boot_sanitize"
+  },
+  "boot_lifecycle_event": {
+    "agent_protocol_version": "1",
+    "local_job_id": "boot-job-1",
+    "sequence": 3,
+    "state": "BOOT_ENVIRONMENT_STARTED",
+    "timestamp": "2026-08-25T00:00:00Z",
+    "message": "Boot sanitize state: BOOT_ENVIRONMENT_STARTED.",
+    "progress": null
+  }
+}

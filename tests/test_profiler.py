@@ -40,6 +40,78 @@ def tmp_sysfs(tmp_path):
     return sysfs
 
 
+def test_lsblk_serial_fallback_populates_profile(tmp_sysfs):
+    dev = tmp_sysfs / "class" / "block" / "sdf"
+    dev.mkdir(parents=True)
+    (dev / "queue").mkdir()
+    (dev / "queue" / "rotational").write_text("1\n", encoding="utf-8")
+    executor = DummyExecutor({
+        ("lsblk", "-dn", "-o", "SERIAL", "/dev/sdf"): {
+            "success": True,
+            "exit_code": 0,
+            "stdout": "LSBLK-SERIAL-123\n",
+        },
+        ("hdparm", "-I", "/dev/sdf"): FileNotFoundError(),
+    })
+    profiler = DeviceProfiler(
+        command_executor=executor,
+        sysfs_root=str(tmp_sysfs),
+        mountinfo_path=str(tmp_sysfs / "mountinfo"),
+    )
+
+    profile = profiler.profile("/dev/sdf")
+
+    assert profile.serial_number == "LSBLK-SERIAL-123"
+
+
+def test_lsblk_empty_serial_returns_none(tmp_sysfs):
+    executor = DummyExecutor({
+        ("lsblk", "-dn", "-o", "SERIAL", "/dev/sdg"): {
+            "success": True,
+            "exit_code": 0,
+            "stdout": "  \n",
+        },
+    })
+    profiler = DeviceProfiler(command_executor=executor, sysfs_root=str(tmp_sysfs))
+
+    assert profiler._serial_from_lsblk("/dev/sdg") is None
+
+
+def test_lsblk_failed_command_result_returns_none(tmp_sysfs):
+    executor = DummyExecutor({
+        ("lsblk", "-dn", "-o", "SERIAL", "/dev/sdh"): {
+            "success": False,
+            "exit_code": 1,
+            "stdout": "SHOULD-NOT-BE-USED",
+            "stderr": "lsblk failed",
+        },
+    })
+    profiler = DeviceProfiler(command_executor=executor, sysfs_root=str(tmp_sysfs))
+
+    assert profiler._serial_from_lsblk("/dev/sdh") is None
+
+
+def test_profiler_does_not_crash_when_lsblk_raises(tmp_sysfs):
+    dev = tmp_sysfs / "class" / "block" / "sdi"
+    dev.mkdir(parents=True)
+    (dev / "queue").mkdir()
+    (dev / "queue" / "rotational").write_text("1\n", encoding="utf-8")
+    executor = DummyExecutor({
+        ("lsblk", "-dn", "-o", "SERIAL", "/dev/sdi"): FileNotFoundError(),
+        ("hdparm", "-I", "/dev/sdi"): FileNotFoundError(),
+    })
+    profiler = DeviceProfiler(
+        command_executor=executor,
+        sysfs_root=str(tmp_sysfs),
+        mountinfo_path=str(tmp_sysfs / "mountinfo"),
+    )
+
+    profile = profiler.profile("/dev/sdi")
+
+    assert profile.serial_number is None
+    assert profile.device_type == "HDD"
+
+
 def test_hdd_detection(tmp_sysfs):
     dev = tmp_sysfs / "class" / "block" / "sda"
     dev.mkdir(parents=True)

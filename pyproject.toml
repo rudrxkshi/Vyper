@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vyper-local-console"
+version = "0.8.0-rc1"
+description = "VYPER Linux local storage sanitization console"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn==0.52.3",
+  "SQLAlchemy==2.0.52",
+  "pydantic==2.13.4",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+central = [
+  "alembic==1.16.5",
+  "psycopg[binary]==3.2.10",
+]
+security = [
+  "pip-audit==2.9.0",
+]
+
+[project.scripts]
+vyper = "local_agent.cli:main"
+vyper-agent = "local_agent.runtime:agent_main"
+vyper-local-agent = "local_agent.runtime:agent_main"
+vyper-console = "local_agent.console:main"
+vyper-diagnose = "local_agent.cli:diagnose_main"
+
+[tool.setuptools]
+py-modules = ["vyper_version"]
+
+[tool.setuptools.packages.find]
+include = ["agent*", "local_agent*"]
+exclude = ["tests*", "backend*", "frontend*"]

@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+[ "${1:-}" = prereqs ] && { prereqs; exit 0; }
+
+. /usr/share/initramfs-tools/hook-functions
+
+copy_exec /usr/sbin/hdparm
+copy_exec /usr/sbin/nvme
+copy_exec /usr/bin/lsblk
+copy_exec /usr/bin/findmnt
+copy_exec /usr/sbin/swapon
+copy_exec /usr/sbin/pvs
+copy_exec /usr/bin/ip
+[ -x /sbin/poweroff ] && copy_exec /sbin/poweroff
+[ -x /sbin/dhclient ] && copy_exec /sbin/dhclient
+
+mkdir -p "$DESTDIR/opt/vyper"
+cp -a /opt/vyper/runtime "$DESTDIR/opt/vyper/runtime"
+mkdir -p "$DESTDIR/etc/ssl"
+cp -a /etc/ssl/certs "$DESTDIR/etc/ssl/certs"

@@ -78,7 +78,21 @@ class DeviceProfiler:
         if profile.device_type == "UNKNOWN":
             profile.warnings.append(f"Device {device_path} is not recognized as HDD, SATA SSD, or NVMe.")
 
+        profile.capabilities.update(self._persistent_identifiers(sysfs_block_dir))
         return profile
+
+    def _persistent_identifiers(self, sysfs_block_dir: Path) -> dict[str, str]:
+        identifiers: dict[str, str] = {}
+        candidates = {
+            "nvme_nguid": (sysfs_block_dir / "nguid", sysfs_block_dir / "device" / "nguid"),
+            "nvme_eui64": (sysfs_block_dir / "eui", sysfs_block_dir / "device" / "eui"),
+            "wwn": (sysfs_block_dir / "wwid", sysfs_block_dir / "device" / "wwid"),
+        }
+        for key, paths in candidates.items():
+            value = next((item for path in paths if (item := self._read_file(path))), None)
+            if value:
+                identifiers[key] = value.strip().lower()
+        return identifiers
 
     def _normalize_device_name(self, device_path: str) -> str:
         raw = str(device_path or "").strip()
@@ -105,7 +119,7 @@ class DeviceProfiler:
                 ["lsblk", "-dn", "-o", "SERIAL", device_path]
             )
 
-            if result.returncode != 0:
+            if not result.success or result.exit_code != 0:
                 return None
 
             serial = result.stdout.strip()

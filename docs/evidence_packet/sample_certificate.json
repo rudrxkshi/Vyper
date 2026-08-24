@@ -1,0 +1,14 @@
+{
+  "illustrative_only": true,
+  "certificate_id": "sample-certificate",
+  "job_id": "sample-engine-job",
+  "final_status": "VERIFIED",
+  "outcome_kind": "sanitization_certificate",
+  "successful_sanitization_claim": true,
+  "evidence_integrity": {
+    "algorithm": "sha256",
+    "hash": "illustrative-not-a-valid-integrity-hash"
+  },
+  "certificate_hash_algorithm": "sha256",
+  "certificate_hash": "illustrative-not-a-valid-certificate-hash"
+}

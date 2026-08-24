@@ -32,8 +32,11 @@ Recommended request header when backend authentication is enabled:
 
 Suggested frontend environment variables:
 
-- `VYPER_API_BASE_URL` - base URL for the FastAPI backend
-- `VYPER_API_KEY` - optional API key for authenticated requests
+- `NEXT_PUBLIC_VYPER_API_BASE_URL` - browser-visible base URL for the FastAPI backend
+
+The optional API key and runtime API URL override are entered in Settings and
+stored in browser local storage. Do not expose a server-side secret through a
+`NEXT_PUBLIC_*` environment variable.
 
 ## Suggested routes / screens
 

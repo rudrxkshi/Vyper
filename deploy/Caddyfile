@@ -1,0 +1,10 @@
+{$VYPER_DOMAIN} {
+  encode zstd gzip
+  header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  handle_path /api/* {
+    reverse_proxy backend:8000
+  }
+  handle {
+    reverse_proxy frontend:8080
+  }
+}
