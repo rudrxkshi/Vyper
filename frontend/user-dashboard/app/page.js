@@ -21,77 +21,6 @@ const STATE_META = {
   CANCELLED: { stage: -1, tone: "pend", label: "Cancelled" },
 };
 
-const initialAssets = [
-  { id: "a1", device_path: "/dev/sdb", model: "WD Blue 1TB", device_type: "HDD", serial_number: "WD-WX61A83K7291", is_system_device: false, mounted: false, mounted_partitions: [] },
-  { id: "a2", device_path: "/dev/sdc", model: "Samsung 870 EVO", device_type: "SSD", serial_number: "S6B2NX0T400123", is_system_device: false, mounted: true, mounted_partitions: ["/data", "/backup"] },
-  { id: "a3", device_path: "/dev/nvme0n1", model: "Crucial P3 500GB", device_type: "NVMe", serial_number: "23091500A8F2", is_system_device: false, mounted: false, mounted_partitions: [] },
-  { id: "a4", device_path: "/dev/sda", model: "System SSD 256GB", device_type: "SSD", serial_number: "SYS-88213C009", is_system_device: true, mounted: true, mounted_partitions: ["/", "/boot"] },
-  { id: "a5", device_path: "/dev/sde", model: "Seagate Barracuda 2TB", device_type: "HDD", serial_number: "ST2000-DM008-Z1", is_system_device: false, mounted: false, mounted_partitions: [] },
-];
-
-const initialJobs = [
-  {
-    id: "job_5511", target: "/dev/sdb", pathway: "ATA secure erase", job_state: "VERIFYING", final_status: null,
-    dry_run: false, outcome_kind: null, successful_sanitization_claim: null, updated: "2m ago",
-    execution_json: '{\n  "pathway": "ata_secure_erase",\n  "duration_seconds": 842,\n  "outcome_kind": "completed"\n}',
-    verification_json: '{\n  "status": "in_progress",\n  "method": "sample_read_verify"\n}',
-    evidence_json: '{\n  "status": "pending"\n}',
-    certificate: null,
-    audit: [
-      { action: "job.created", actor: "operator_1", at: "09:11:58" },
-      { action: "job.execution.completed", actor: "agent", at: "09:25:40" },
-      { action: "job.verification.started", actor: "agent", at: "09:25:41" },
-    ],
-  },
-  {
-    id: "job_5510", target: "/dev/nvme0n1", pathway: "NVMe sanitize", job_state: "VERIFIED", final_status: "SUCCESS",
-    dry_run: false, outcome_kind: "completed", successful_sanitization_claim: true, updated: "14m ago",
-    execution_json: '{\n  "pathway": "nvme_sanitize",\n  "duration_seconds": 210,\n  "outcome_kind": "completed"\n}',
-    verification_json: '{\n  "status": "passed",\n  "method": "full_read_verify"\n}',
-    evidence_json: '{\n  "status": "collected",\n  "artifact": "evidence_5510.bin"\n}',
-    certificate: { id: "cert_9f2ac103", hash: "a3f92e17c9bb21be", standard: "NIST 800-88" },
-    audit: [
-      { action: "job.created", actor: "operator_1", at: "09:11:58" },
-      { action: "job.execution.completed", actor: "agent", at: "09:25:40" },
-      { action: "certificate.issued", actor: "agent", at: "09:41:02" },
-    ],
-  },
-  {
-    id: "job_5498", target: "/dev/sdc", pathway: "Overwrite (3-pass)", job_state: "FAILED", final_status: "FAILURE",
-    dry_run: false, outcome_kind: "error", successful_sanitization_claim: false, updated: "1h ago",
-    execution_json: '{\n  "pathway": "overwrite_3pass",\n  "outcome_kind": "error",\n  "error": "device_busy"\n}',
-    verification_json: '{\n  "status": "not_run"\n}',
-    evidence_json: '{\n  "status": "not_collected"\n}',
-    certificate: null,
-    audit: [
-      { action: "job.created", actor: "operator_2", at: "07:58:02" },
-      { action: "job.execution.failed", actor: "agent", at: "08:02:11" },
-    ],
-  },
-  {
-    id: "job_5480", target: "/dev/sde", pathway: "Overwrite (3-pass)", job_state: "AWAITING_AUTHORIZATION", final_status: null,
-    dry_run: true, outcome_kind: null, successful_sanitization_claim: null, updated: "3h ago",
-    execution_json: '{\n  "status": "not_started"\n}',
-    verification_json: '{\n  "status": "not_run"\n}',
-    evidence_json: '{\n  "status": "not_collected"\n}',
-    certificate: null,
-    audit: [{ action: "job.created", actor: "operator_1", at: "06:40:19" }],
-  },
-];
-
-const initialCerts = [
-  { id: "cert_9f2ac103", job_id: "job_5510", target: "/dev/nvme0n1", final_status: "SUCCESS", claim: true, hash: "a3f92e17c9bb21be", standard: "NIST 800-88", issued: "09:41:02" },
-  { id: "cert_7b41e88a", job_id: "job_5442", target: "/dev/sde", final_status: "SUCCESS", claim: true, hash: "77c1f0aa982be411", standard: "NIST 800-88", issued: "Yesterday" },
-  { id: "cert_2d9040f1", job_id: "job_5401", target: "/dev/sdc", final_status: "FAILURE", claim: false, hash: "—", standard: "—", issued: "Yesterday" },
-];
-
-const initialAuditLogs = [
-  { action: "job.created", actor: "operator_1", request: '{ target: "/dev/sdb" }', response: '{ job_id: "job_5511" }', at: "09:11:58" },
-  { action: "certificate.issued", actor: "agent", request: '{ job_id: "job_5510" }', response: "{ status: 200 }", at: "09:41:02" },
-  { action: "job.execution.failed", actor: "agent", request: '{ job_id: "job_5498" }', response: '{ error: "device_busy" }', at: "08:02:11" },
-  { action: "job.created", actor: "operator_2", request: '{ target: "/dev/sdc" }', response: '{ job_id: "job_5498" }', at: "07:58:02" },
-];
-
 function Badge({ tone = "pend", children, stamp }) {
   return (
     <span className={"nb-badge nb-tone-" + tone + (stamp ? " nb-stamp" : "")}>
@@ -99,20 +28,33 @@ function Badge({ tone = "pend", children, stamp }) {
     </span>
   );
 }
-
 function JsonPanel({ title, json, defaultOpen }) {
   const [open, setOpen] = useState(!!defaultOpen);
+
+  const displayJson =
+    typeof json === "string"
+      ? json
+      : JSON.stringify(json ?? {}, null, 2);
+
   return (
     <div className={"nb-json" + (open ? " open" : "")}>
-      <button className="nb-json-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+      <button
+        className="nb-json-head"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
         <span>{title}</span>
         <ChevronDown size={16} className="nb-chev" />
       </button>
-      {open && <pre className="nb-json-body">{json}</pre>}
+
+      {open && (
+        <pre className="nb-json-body">
+          {displayJson}
+        </pre>
+      )}
     </div>
   );
 }
-
 function Pipeline({ jobState }) {
   const meta = STATE_META[jobState] || STATE_META.PENDING;
   const failedAt = jobState === "FAILED" || jobState === "UNSUPPORTED" ? meta.stage : -1;
@@ -139,14 +81,18 @@ function Pipeline({ jobState }) {
 
 export default function VyperDashboard() {
   const [screen, setScreen] = useState("dashboard");
-  const [assets] = useState(initialAssets);
-  const [jobs, setJobs] = useState(initialJobs);
-  const [certs, setCerts] = useState(initialCerts);
-  const [auditLogs, setAuditLogs] = useState(initialAuditLogs);
+  const [assets, setAssets] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [certs, setCerts] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [jobDetail, setJobDetail] = useState(null);
 
-  const [selectedAssetId, setSelectedAssetId] = useState(initialAssets[1].id);
-  const [selectedJobId, setSelectedJobId] = useState(initialJobs[0].id);
-  const [selectedCertId, setSelectedCertId] = useState(initialCerts[0].id);
+  const [loading, setLoading] = useState(true);
+  const [backendConnected, setBackendConnected] = useState(false);
+
+  const [selectedAssetId, setSelectedAssetId] = useState(null);
+  const [selectedJobId, setSelectedJobId] = useState(null);
+  const [selectedCertId, setSelectedCertId] = useState(null);
 
   const [assetType, setAssetType] = useState("All");
   const [assetMount, setAssetMount] = useState("All");
@@ -157,24 +103,135 @@ export default function VyperDashboard() {
   const [auditActor, setAuditActor] = useState("");
   const [auditAction, setAuditAction] = useState("All");
 
-  const [form, setForm] = useState({ target: initialAssets[0].device_path, ataPassword: "", dryRun: true, authorized: false });
+  const [form, setForm] = useState({ target: "", ataPassword: "", dryRun: true, authorized: false });
   const [formError, setFormError] = useState("");
 
-  const [apiUrl, setApiUrl] = useState("https://api.vyper.internal");
+  const [apiUrl, setApiUrl] = useState("http://127.0.0.1:8000");
   const [apiKey, setApiKey] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
+  useEffect(() => {
+    async function loadBackendData() {
+      try {
+        setLoading(true);
+
+        const headers = {};
+
+        if (apiKey) {
+          headers["X-VYPER-API-Key"] = apiKey;
+        }
+
+        const safeFetch = async (url) => {
+          try {
+            const res = await fetch(url, { headers });
+
+            if (!res.ok) {
+              console.log(`Backend endpoint unavailable: ${url}`);
+              return null;
+            }
+
+            return await res.json();
+          } catch (error) {
+            console.log(`Backend endpoint unavailable: ${url}`);
+            return null;
+          }
+        };
+
+        const [assetsData, jobsData, certsData, auditData] =
+          await Promise.all([
+            safeFetch(`${apiUrl}/assets`),
+            safeFetch(`${apiUrl}/jobs`),
+            safeFetch(`${apiUrl}/certificates`),
+            safeFetch(`${apiUrl}/audit-logs`),
+          ]);
+
+        // Only replace hardcoded data when backend actually returned data.
+        if (assetsData !== null) {
+          setAssets(assetsData);
+          setSelectedAssetId(assetsData[0]?.id || null);
+        }
+
+        if (jobsData !== null) {
+          setJobs(jobsData);
+          setSelectedJobId(jobsData[0]?.id || null);
+        }
+
+        if (certsData !== null) {
+          setCerts(certsData);
+          setSelectedCertId(certsData[0]?.id || null);
+        }
+
+        if (auditData !== null) {
+          setAuditLogs(auditData);
+        }
+
+        setBackendConnected(true);
+
+      } catch (error) {
+        console.error("Backend connection failed:", error);
+        setBackendConnected(false);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadBackendData();
+  }, [apiUrl, apiKey]);
+
+  async function loadJobDetail(jobId) {
+    try {
+      const headers = {};
+
+      if (apiKey) {
+        headers["X-VYPER-API-Key"] = apiKey;
+      }
+
+      const response = await fetch(`${apiUrl}/jobs/${jobId}`, {
+        headers,
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to load job details.");
+      }
+
+      const jobData = await response.json();
+
+      setJobs((prev) =>
+        prev.map((job) =>
+          job.id === jobId
+            ? {
+                ...job,
+                ...jobData,
+                audit: jobData.audit || [],
+              }
+            : job
+        )
+      );
+
+      return jobData;
+    } catch (error) {
+      console.error("Failed to load job detail:", error);
+      return null;
+    }
+  }
 
   const timers = useRef([]);
-  const nextJobSequence = useRef(5512);
-  const nextCertSequence = useRef(10);
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
   function goto(screenId, opts) {
     setScreen(screenId);
-    if (opts?.jobId) setSelectedJobId(opts.jobId);
-    if (opts?.certId) setSelectedCertId(opts.certId);
-  }
 
+    if (opts?.jobId) {
+      setSelectedJobId(opts.jobId);
+
+      if (screenId === "jobdetail") {
+        loadJobDetail(opts.jobId);
+      }
+    }
+
+    if (opts?.certId) {
+      setSelectedCertId(opts.certId);
+    }
+  }
   function updateJob(id, patch) {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
   }
@@ -183,75 +240,69 @@ export default function VyperDashboard() {
     setAuditLogs((prev) => [{ action: entry.action, actor: entry.actor, request: '{ job_id: "' + jobId + '" }', response: "{ status: 200 }", at: entry.at }, ...prev]);
   }
 
-  function submitJob(e) {
+  async function submitJob(e) {
     e.preventDefault();
+
     if (!form.target) {
       setFormError("Choose a target device before submitting.");
       return;
     }
+
     if (!form.dryRun && !form.authorized) {
-      setFormError("Check the authorization box or enable dry run before submitting.");
+      setFormError(
+        "Check the authorization box or enable dry run before submitting."
+      );
       return;
     }
+
     setFormError("");
-    const id = "job_" + nextJobSequence.current++;
-    const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    const newJob = {
-      id, target: form.target, pathway: form.dryRun ? "Plan only" : "ATA secure erase",
-      job_state: "PENDING", final_status: null, dry_run: form.dryRun, outcome_kind: null,
-      successful_sanitization_claim: null, updated: "just now",
-      execution_json: '{\n  "status": "not_started"\n}', verification_json: '{\n  "status": "not_run"\n}',
-      evidence_json: '{\n  "status": "not_collected"\n}', certificate: null,
-      audit: [{ action: "job.created", actor: "operator_1", at: now }],
-    };
-    setJobs((prev) => [newJob, ...prev]);
-    setAuditLogs((prev) => [{ action: "job.created", actor: "operator_1", request: '{ target: "' + form.target + '" }', response: '{ job_id: "' + id + '" }', at: now }, ...prev]);
-    goto("jobdetail", { jobId: id });
-    runPipeline(id, form.dryRun);
-    setForm({ target: form.target, ataPassword: "", dryRun: form.dryRun, authorized: false });
-  }
 
-  function runPipeline(id, dryRun) {
-    const at = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    const t1 = setTimeout(() => updateJob(id, { job_state: "PROFILING" }), 900);
-    const t2 = setTimeout(() => updateJob(id, { job_state: "POLICY_SELECTED" }), 1800);
-    timers.current.push(t1, t2);
-    if (dryRun) {
-      const t3 = setTimeout(() => {
-        updateJob(id, { job_state: "AWAITING_AUTHORIZATION" });
-        pushAudit(id, { action: "job.plan.ready", actor: "agent", at: at() });
-      }, 2700);
-      timers.current.push(t3);
-      return;
+    try {
+      const headers = {
+        "Content-Type": "application/json",
+      };
+
+      if (apiKey) {
+        headers["X-VYPER-API-Key"] = apiKey;
+      }
+
+      const response = await fetch(`${apiUrl}/jobs/sanitize`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          target: form.target,
+          ata_password: form.ataPassword,
+          dry_run: form.dryRun,
+          authorized: form.authorized,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to create job.");
+      }
+
+      const newJob = await response.json();
+
+      setJobs((prev) => [newJob, ...prev]);
+      setSelectedJobId(newJob.id);
+
+      goto("jobdetail", {
+        jobId: newJob.id,
+      });
+
+      setForm({
+        target: form.target,
+        ataPassword: "",
+        dryRun: form.dryRun,
+        authorized: false,
+      });
+
+    } catch (error) {
+      console.error(error);
+      setFormError(error.message);
     }
-    const t3 = setTimeout(() => updateJob(id, { job_state: "RUNNING" }), 2700);
-    const t4 = setTimeout(() => {
-      updateJob(id, {
-        job_state: "VERIFYING",
-        execution_json: '{\n  "pathway": "ata_secure_erase",\n  "duration_seconds": 512,\n  "outcome_kind": "completed"\n}',
-      });
-      pushAudit(id, { action: "job.execution.completed", actor: "agent", at: at() });
-    }, 4200);
-    const t5 = setTimeout(() => {
-      const certSequence = String(nextCertSequence.current++).padStart(8, "0");
-      const certId = "cert_" + certSequence;
-      const hash = ("vyper" + id + certSequence).replace(/[^a-zA-Z0-9]/g, "").padEnd(16, "0").slice(0, 16);
-      updateJob(id, {
-        job_state: "VERIFIED", final_status: "SUCCESS", outcome_kind: "completed", successful_sanitization_claim: true,
-        verification_json: '{\n  "status": "passed",\n  "method": "full_read_verify"\n}',
-        evidence_json: '{\n  "status": "collected",\n  "artifact": "evidence_' + id + '.bin"\n}',
-        certificate: { id: certId, hash, standard: "NIST 800-88" },
-      });
-      setJobs((prev) => {
-        const j = prev.find((x) => x.id === id);
-        setCerts((c) => [{ id: certId, job_id: id, target: j?.target || "", final_status: "SUCCESS", claim: true, hash, standard: "NIST 800-88", issued: at() }, ...c]);
-        return prev;
-      });
-      pushAudit(id, { action: "certificate.issued", actor: "agent", at: at() });
-    }, 5600);
-    timers.current.push(t3, t4, t5);
   }
-
+  
   const filteredAssets = assets.filter((a) => {
     if (assetType !== "All" && a.device_type !== assetType) return false;
     if (assetMount === "Mounted" && !a.mounted) return false;
@@ -260,26 +311,24 @@ export default function VyperDashboard() {
     if (q && !a.model.toLowerCase().includes(q) && !a.serial_number.toLowerCase().includes(q)) return false;
     return true;
   });
-  const selectedAsset = assets.find((a) => a.id === selectedAssetId) || assets[0];
+  const selectedAsset = assets.find((a) => a.id === selectedAssetId) || null;
 
   const filteredJobs = jobs.filter((j) => jobStateFilter === "All" || j.job_state === jobStateFilter);
-  const selectedJob = jobs.find((j) => j.id === selectedJobId) || jobs[0];
+  const selectedJob = jobs.find((j) => j.id === selectedJobId) || null;
 
-  const selectedCert = certs.find((c) => c.id === selectedCertId) || certs[0];
+  const selectedCert = certs.find((c) => c.id === selectedCertId) || null;
 
   const filteredAuditLogs = auditLogs.filter((l) => {
     if (auditAction !== "All" && l.action !== auditAction) return false;
     if (auditActor && !l.actor.toLowerCase().includes(auditActor.toLowerCase())) return false;
     return true;
   });
-
   const counts = {
     total: assets.length,
     verified: jobs.filter((j) => j.job_state === "VERIFIED").length,
     failed: jobs.filter((j) => j.job_state === "FAILED").length,
     inconclusive: jobs.filter((j) => j.job_state === "INCONCLUSIVE").length,
   };
-
   const NAV = [
     { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
     { id: "assets", label: "Assets", icon: HardDrive },
@@ -288,7 +337,6 @@ export default function VyperDashboard() {
     { id: "auditlogs", label: "Audit logs", icon: ScrollText },
     { id: "settings", label: "Settings", icon: SettingsIcon },
   ];
-
   return (
     <div className="nb-root">
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" />
@@ -461,21 +509,18 @@ export default function VyperDashboard() {
           </nav>
           <div className="nb-sidebar-footer"><span className="nb-dot" />API connected</div>
         </aside>
-
         <main className="nb-main">
           {screen === "dashboard" && (
             <>
               <div className="nb-crumbs">Dashboard</div>
               <h1 className="nb-h1 nb-heading">Overview</h1>
               <p className="nb-sub">Recent activity, asset counts, and outcome summary.</p>
-
               <div className="nb-grid-4">
                 <div className="nb-metric"><div className="nb-metric-label">Assets tracked</div><div className="nb-metric-value">{counts.total}</div></div>
                 <div className="nb-metric"><div className="nb-metric-label">Verified</div><div className="nb-metric-value ok">{counts.verified}</div></div>
                 <div className="nb-metric"><div className="nb-metric-label">Failed</div><div className="nb-metric-value bad">{counts.failed}</div></div>
                 <div className="nb-metric"><div className="nb-metric-label">Inconclusive</div><div className="nb-metric-value warn">{counts.inconclusive}</div></div>
               </div>
-
               <div className="nb-grid-2" style={{ marginTop: 16 }}>
                 <div className="nb-card">
                   <div className="nb-section-title">Recent jobs <span className="nb-hint">job state and final status shown separately</span></div>
@@ -497,7 +542,6 @@ export default function VyperDashboard() {
                     </tbody>
                   </table>
                 </div>
-
                 <div className="nb-card">
                   <div className="nb-section-title">Recent certificates</div>
                   <table>
@@ -516,13 +560,11 @@ export default function VyperDashboard() {
               </div>
             </>
           )}
-
           {screen === "assets" && (
             <>
               <div className="nb-crumbs">Assets</div>
               <h1 className="nb-h1 nb-heading">Asset inventory</h1>
               <p className="nb-sub">Read-only inventory. System-associated devices are blocked from destructive actions.</p>
-
               <div className="nb-grid-2">
                 <div className="nb-card">
                   <div className="nb-filter-row">
@@ -553,29 +595,64 @@ export default function VyperDashboard() {
                     </tbody>
                   </table>
                 </div>
-
+ 
                 <div className="nb-card">
                   <div className="nb-section-title">Asset detail <span className="nb-hint">read-only</span></div>
-                  <div className="nb-detail-row"><div className="k">device_path</div><div className="v">{selectedAsset.device_path}</div></div>
-                  <div className="nb-detail-row"><div className="k">device_type</div><div className="v">{selectedAsset.device_type}</div></div>
-                  <div className="nb-detail-row"><div className="k">serial_number</div><div className="v">{selectedAsset.serial_number}</div></div>
-                  <div className="nb-detail-row"><div className="k">is_system_device</div><div className="v">{String(selectedAsset.is_system_device)}</div></div>
-                  <div className="nb-detail-row"><div className="k">mounted</div><div className="v">{String(selectedAsset.mounted)}</div></div>
-                  <div className="nb-detail-row"><div className="k">mounted_partitions</div><div className="v">{selectedAsset.mounted_partitions.join(", ") || "—"}</div></div>
-                  {selectedAsset.is_system_device && (
-                    <div className="nb-callout" style={{ marginTop: 12 }}><b>Blocked:</b> system-associated device. Destructive jobs cannot target this asset.</div>
+
+                  {selectedAsset ? (
+                    <>
+                      <div className="nb-detail-row">
+                        <div className="k">device_path</div>
+                        <div className="v">{selectedAsset.device_path}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">device_type</div>
+                        <div className="v">{selectedAsset.device_type}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">serial_number</div>
+                        <div className="v">{selectedAsset.serial_number}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">is_system_device</div>
+                        <div className="v">{String(selectedAsset.is_system_device)}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">mounted</div>
+                        <div className="v">{String(selectedAsset.mounted)}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">mounted_partitions</div>
+                        <div className="v">
+                          {selectedAsset.mounted_partitions.join(", ") || "—"}
+                        </div>
+                      </div>
+
+                      {selectedAsset.is_system_device && (
+                        <div className="nb-callout" style={{ marginTop: 12 }}>
+                          <b>Blocked:</b> system-associated device. Destructive jobs cannot target this asset.
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="nb-callout">
+                      <b>No assets available.</b> The backend returned no devices.
+                    </div>
                   )}
                 </div>
               </div>
             </>
           )}
-
           {screen === "jobs" && (
             <>
               <div className="nb-crumbs">Jobs</div>
               <h1 className="nb-h1 nb-heading">Jobs</h1>
               <p className="nb-sub">Create a sanitization job and monitor existing ones.</p>
-
               <div className="nb-grid-2">
                 <div className="nb-card">
                   <div className="nb-section-title">Job queue</div>
@@ -603,17 +680,29 @@ export default function VyperDashboard() {
                     </tbody>
                   </table>
                 </div>
-
                 <div className="nb-card">
                   <div className="nb-section-title">New sanitization job</div>
                   <form onSubmit={submitJob}>
                     <div className="nb-field">
                       <label>Target device</label>
-                      <select value={form.target} onChange={(e) => setForm({ ...form, target: e.target.value })}>
-                        {assets.filter((a) => !a.is_system_device).map((a) => (
-                          <option key={a.id} value={a.device_path}>{a.device_path} — {a.model} ({a.device_type})</option>
-                        ))}
-                      </select>
+                      {assets.filter((a) => !a.is_system_device).length > 0 ? (
+                        <select
+                          value={form.target}
+                          onChange={(e) => setForm({ ...form, target: e.target.value })}
+                        >
+                          {assets
+                            .filter((a) => !a.is_system_device)
+                            .map((a) => (
+                              <option key={a.id} value={a.device_path}>
+                                {a.device_path} — {a.model} ({a.device_type})
+                              </option>
+                            ))}
+                        </select>
+                      ) : (
+                        <div className="nb-callout">
+                          <b>No usable assets available.</b> The backend returned no devices.
+                        </div>
+                      )}
                     </div>
                     <div className="nb-field">
                       <label>ATA password <span className="nb-hint">only applies to ATA secure erase</span></label>
@@ -634,20 +723,18 @@ export default function VyperDashboard() {
                     {formError && <div className="nb-error">{formError}</div>}
                     <div className="nb-btn-row">
                       <button type="submit" className="nb-btn primary">Submit job</button>
-                      <button type="button" className="nb-btn" onClick={() => setForm({ target: assets[0].device_path, ataPassword: "", dryRun: true, authorized: false })}>Reset</button>
+                      <button type="button" className="nb-btn" onClick={() => setForm({ target: assets.find((a) => !a.is_system_device)?.device_path || "", ataPassword: "", dryRun: true, authorized: false })}>Reset</button>
                     </div>
                   </form>
                 </div>
               </div>
             </>
           )}
-
           {screen === "jobdetail" && selectedJob && (
             <>
               <div className="nb-crumbs">Jobs / {selectedJob.target}</div>
               <h1 className="nb-h1 nb-heading">Job detail — <span className="nb-mono">{selectedJob.target}</span></h1>
               <p className="nb-sub">Full pipeline state chain. Success is treated as non-final until verification and a certificate exist.</p>
-
               <div className="nb-card">
                 <div className="nb-section-title">Pipeline state</div>
                 <Pipeline jobState={selectedJob.job_state} />
@@ -655,7 +742,6 @@ export default function VyperDashboard() {
                   <b>job_state:</b> {selectedJob.job_state} &nbsp; · &nbsp; <b>final_status:</b> {selectedJob.final_status || "not yet set"} &nbsp; · &nbsp; <b>dry_run:</b> {String(selectedJob.dry_run)}
                 </div>
               </div>
-
               <div className="nb-grid-2">
                 <div>
                   <div className="nb-section-title" style={{ marginTop: 4 }}>Payloads <span className="nb-hint">expandable, not raw blobs</span></div>
@@ -674,15 +760,18 @@ export default function VyperDashboard() {
                     </div>
                   )}
                 </div>
-
                 <div>
                   <div className="nb-section-title" style={{ marginTop: 4 }}>Audit log entries <span className="nb-hint">this job</span></div>
                   <div className="nb-card" style={{ padding: 0 }}>
                     <table>
                       <thead><tr><th>Action</th><th>Actor</th><th>At</th></tr></thead>
                       <tbody>
-                        {selectedJob.audit.map((a, i) => (
-                          <tr key={i}><td>{a.action}</td><td>{a.actor}</td><td className="nb-mono">{a.at}</td></tr>
+                        {(selectedJob.audit || []).map((a, i) => (
+                          <tr key={i}>
+                            <td>{a.action}</td>
+                            <td>{a.actor}</td>
+                            <td className="nb-mono">{a.at}</td>
+                          </tr>
                         ))}
                       </tbody>
                     </table>
@@ -697,52 +786,111 @@ export default function VyperDashboard() {
               </div>
             </>
           )}
-
           {screen === "certificates" && (
             <>
               <div className="nb-crumbs">Certificates</div>
               <h1 className="nb-h1 nb-heading">Certificates</h1>
               <p className="nb-sub">Certificate index and detail, with hash and sanitization claim.</p>
-
               <div className="nb-grid-2">
                 <div className="nb-card">
                   <table>
                     <thead><tr><th>Certificate</th><th>Target</th><th>Outcome</th><th>Claim</th></tr></thead>
                     <tbody>
-                      {certs.map((c) => (
-                        <tr key={c.id} className="nb-row" onClick={() => setSelectedCertId(c.id)}>
-                          <td className="nb-mono">{c.id}</td>
-                          <td className="nb-mono">{c.target}</td>
-                          <td><Badge tone={c.final_status === "SUCCESS" ? "ok" : "bad"}>{c.final_status}</Badge></td>
-                          <td>{c.claim ? "Successful" : "Not claimed"}</td>
+                      {certs.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={4}
+                            style={{ textAlign: "center", color: "#8A8878" }}
+                          >
+                            No certificates available.
+                          </td>
                         </tr>
-                      ))}
+                      ) : (
+                        certs.map((c) => (
+                          <tr
+                            key={c.id}
+                            className="nb-row"
+                            onClick={() => setSelectedCertId(c.id)}
+                          >
+                            <td className="nb-mono">{c.id}</td>
+                            <td className="nb-mono">{c.target}</td>
+                            <td>
+                              <Badge tone={c.final_status === "SUCCESS" ? "ok" : "bad"}>
+                                {c.final_status}
+                              </Badge>
+                            </td>
+                            <td>{c.claim ? "Successful" : "Not claimed"}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
-                <div className="nb-stamp-card">
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                    <ShieldCheck size={20} aria-hidden="true" />
-                    <span className="nb-heading" style={{ fontSize: 14 }}>Certificate detail</span>
+                {selectedCert ? (
+                  <div className="nb-stamp-card">
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                      <ShieldCheck size={20} aria-hidden="true" />
+                      <span className="nb-heading" style={{ fontSize: 14 }}>
+                        Certificate detail
+                      </span>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">certificate_id</div>
+                      <div className="v">{selectedCert.id}</div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">job_id</div>
+                      <div className="v">{selectedCert.job_id}</div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">target</div>
+                      <div className="v">{selectedCert.target}</div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">final_status</div>
+                      <div className="v">
+                        <Badge
+                          tone={selectedCert.final_status === "SUCCESS" ? "ok" : "bad"}
+                          stamp
+                        >
+                          {selectedCert.final_status}
+                        </Badge>
+                      </div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">successful_sanitization_claim</div>
+                      <div className="v">{String(selectedCert.claim)}</div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">certificate_hash</div>
+                      <div className="v">{selectedCert.hash}</div>
+                    </div>
+
+                    <JsonPanel
+                      title="certificate_json"
+                      json={'{\n  "standard": "' + selectedCert.standard + '",\n  "issued_at": "' + selectedCert.issued + '"\n}'}
+                    />
                   </div>
-                  <div className="nb-detail-row"><div className="k">certificate_id</div><div className="v">{selectedCert.id}</div></div>
-                  <div className="nb-detail-row"><div className="k">job_id</div><div className="v">{selectedCert.job_id}</div></div>
-                  <div className="nb-detail-row"><div className="k">target</div><div className="v">{selectedCert.target}</div></div>
-                  <div className="nb-detail-row"><div className="k">final_status</div><div className="v"><Badge tone={selectedCert.final_status === "SUCCESS" ? "ok" : "bad"} stamp>{selectedCert.final_status}</Badge></div></div>
-                  <div className="nb-detail-row"><div className="k">successful_sanitization_claim</div><div className="v">{String(selectedCert.claim)}</div></div>
-                  <div className="nb-detail-row"><div className="k">certificate_hash</div><div className="v">{selectedCert.hash}</div></div>
-                  <JsonPanel title="certificate_json" json={'{\n  "standard": "' + selectedCert.standard + '",\n  "issued_at": "' + selectedCert.issued + '"\n}'} />
-                </div>
+                ) : (
+                  <div className="nb-callout">
+                    <b>No certificates available.</b> The backend returned no certificates.
+                  </div>
+                )}
               </div>
             </>
           )}
-
+ 
           {screen === "auditlogs" && (
             <>
               <div className="nb-crumbs">Audit logs</div>
               <h1 className="nb-h1 nb-heading">Audit trail</h1>
               <p className="nb-sub">Request and response entries with actor metadata and timestamps.</p>
-
               <div className="nb-card">
                 <div className="nb-filter-row">
                   <div className="nb-search">
@@ -772,13 +920,11 @@ export default function VyperDashboard() {
               </div>
             </>
           )}
-
           {screen === "settings" && (
             <>
               <div className="nb-crumbs">Settings</div>
               <h1 className="nb-h1 nb-heading">Settings</h1>
               <p className="nb-sub">API base URL and optional authentication.</p>
-
               <div className="nb-card" style={{ maxWidth: 460 }}>
                 <div className="nb-field">
                   <label>VYPER_API_BASE_URL</label>
