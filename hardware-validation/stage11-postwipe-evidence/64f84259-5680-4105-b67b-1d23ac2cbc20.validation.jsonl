@@ -1,0 +1,2 @@
+{"event": "vm_validation_report", "final_conclusion": "PASS", "report_files": {"json": "/var/lib/vyper-vm-evidence/hardware-validation/20260825T150840Z-system-disk-vm-dry-run.json", "markdown": "/var/lib/vyper-vm-evidence/hardware-validation/20260825T150840Z-system-disk-vm-dry-run.md"}, "timestamp": "2026-08-25T15:08:40.644168Z"}
+{"event": "job_terminal", "state": "INCONCLUSIVE", "timestamp": "2026-08-25T15:08:40.644247Z", "upload_status": "RETAINED_OFFLINE"}

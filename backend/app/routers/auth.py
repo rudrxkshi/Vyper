@@ -13,11 +13,15 @@ from sqlalchemy.orm import Session
 from ..auth import OperatorPrincipal, OperatorRole, require_api_key, require_roles
 from ..db import get_db
 from ..models import LoginAttemptRecord, OperatorSessionRecord, UserRecord
-from ..schemas import LoginRequest, UserCreate, UserRead, UserUpdate
-from ..security import hash_password, production_mode, record_audit_event, token_digest, verify_password
+from ..schemas import LoginRequest, MFACodeRequest, MFAEnrollRequest, UserCreate, UserRead, UserUpdate
+from ..security import (
+	decrypt_mfa_secret, encrypt_mfa_secret, hash_password, new_totp_secret, production_mode,
+	record_audit_event, token_digest, verify_password, verify_totp,
+)
 
 router = APIRouter(tags=["authentication"])
 SESSION_COOKIE = "vyper_session"
+CSRF_COOKIE = "vyper_csrf"
 
 
 def _now() -> datetime:
@@ -27,6 +31,27 @@ def _now() -> datetime:
 def _user_dict(user: UserRecord) -> dict:
 	return {"id": user.id, "username": user.username, "display_name": user.display_name, "role": user.role,
 		"disabled_at": user.disabled_at, "created_at": user.created_at}
+
+
+def _issue_session(db: Session, response: Response, user: UserRecord, *, assurance: str, now: datetime) -> tuple[str, str]:
+	token = secrets.token_urlsafe(48); csrf = secrets.token_urlsafe(32)
+	idle_ttl = int(os.getenv("VYPER_SESSION_TTL_SECONDS", "28800"))
+	absolute_ttl = int(os.getenv("VYPER_SESSION_ABSOLUTE_SECONDS", "86400"))
+	db.add(OperatorSessionRecord(id=str(uuid4()), user_id=user.id, token_hash=token_digest(token), created_at=now,
+		expires_at=now + timedelta(seconds=idle_ttl), absolute_expires_at=now + timedelta(seconds=absolute_ttl),
+		last_seen_at=now, mfa_assurance=assurance, csrf_token_hash=token_digest(csrf)))
+	response.set_cookie(SESSION_COOKIE, token, httponly=True, secure=production_mode(), samesite="lax", max_age=idle_ttl, path="/")
+	response.set_cookie(CSRF_COOKIE, csrf, httponly=False, secure=production_mode(), samesite="strict", max_age=idle_ttl, path="/")
+	return token, csrf
+
+
+def _rotate_session(request: Request, response: Response, db: Session, user: UserRecord, assurance: str) -> str:
+	now = _now(); token = request.cookies.get(SESSION_COOKIE)
+	if token:
+		record = db.execute(select(OperatorSessionRecord).where(OperatorSessionRecord.token_hash == token_digest(token))).scalar_one_or_none()
+		if record: record.revoked_at = now
+	_, csrf = _issue_session(db, response, user, assurance=assurance, now=now)
+	return csrf
 
 
 @router.post("/auth/login")
@@ -48,13 +73,9 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
 	if not succeeded:
 		db.commit()
 		raise HTTPException(status_code=401, detail="Invalid username or password.")
-	token = secrets.token_urlsafe(48)
-	ttl = int(os.getenv("VYPER_SESSION_TTL_SECONDS", "28800"))
-	db.add(OperatorSessionRecord(id=str(uuid4()), user_id=user.id, token_hash=token_digest(token), created_at=now,
-		expires_at=now + timedelta(seconds=ttl), last_seen_at=now))
+	_, csrf = _issue_session(db, response, user, assurance="PASSWORD", now=now)
 	db.commit()
-	response.set_cookie(SESSION_COOKIE, token, httponly=True, secure=production_mode(), samesite="lax", max_age=ttl, path="/")
-	return _user_dict(user)
+	return {**_user_dict(user), "mfa_required": bool(user.mfa_enabled), "mfa_assurance": "PASSWORD", "csrf_token": csrf}
 
 
 @router.post("/auth/logout", status_code=204)
@@ -67,12 +88,64 @@ def logout(request: Request, response: Response, principal: OperatorPrincipal = 
 	record_audit_event(db, actor=principal.audit_identity, action="LOGOUT", resource=f"user:{principal.username}", request_id=getattr(request.state, "request_id", None))
 	db.commit()
 	response.delete_cookie(SESSION_COOKIE, path="/", secure=production_mode(), httponly=True, samesite="lax")
+	response.delete_cookie(CSRF_COOKIE, path="/", secure=production_mode(), httponly=False, samesite="strict")
 
 
 @router.get("/auth/me")
 def me(principal: OperatorPrincipal = Depends(require_api_key)):
-	return {"id": principal.user_id, "username": principal.username, "role": principal.role.value,
+	return {"id": principal.user_id, "username": principal.username, "role": principal.role.value, "mfa_assurance": principal.mfa_assurance,
 		"development_identity": principal.development_identity}
+
+
+@router.post("/auth/mfa/enroll")
+def enroll_mfa(payload: MFAEnrollRequest, request: Request, principal: OperatorPrincipal = Depends(require_api_key), db: Session = Depends(get_db)):
+	user = db.get(UserRecord, principal.user_id)
+	if user is None or not verify_password(payload.password, user.password_hash):
+		raise HTTPException(status_code=401, detail="Password verification failed.")
+	secret = new_totp_secret(); recovery_codes = [secrets.token_urlsafe(12) for _ in range(10)]
+	user.mfa_secret_encrypted = encrypt_mfa_secret(secret); user.mfa_recovery_codes_json = [token_digest(code) for code in recovery_codes]
+	user.mfa_enabled = False
+	record_audit_event(db, actor=principal.audit_identity, action="MFA_ENROLLMENT_STARTED", resource=f"user:{user.username}",
+		request_id=getattr(request.state, "request_id", None))
+	db.commit()
+	return {"secret": secret, "otpauth_uri": f"otpauth://totp/VYPER:{user.username}?secret={secret}&issuer=VYPER",
+		"recovery_codes": recovery_codes, "warning": "These values are shown once."}
+
+
+def _complete_mfa(code: str, request: Request, response: Response, principal: OperatorPrincipal, db: Session, *, enable: bool) -> dict:
+	user = db.get(UserRecord, principal.user_id)
+	if user is None or not user.mfa_secret_encrypted:
+		raise HTTPException(status_code=409, detail="MFA enrollment is not available.")
+	assurance = None; normalized = code.strip()
+	if verify_totp(decrypt_mfa_secret(user.mfa_secret_encrypted), normalized):
+		assurance = "TOTP"
+	else:
+		digest = token_digest(normalized); stored = list(user.mfa_recovery_codes_json or [])
+		if digest in stored:
+			stored.remove(digest); user.mfa_recovery_codes_json = stored; assurance = "RECOVERY"
+	if assurance is None:
+		raise HTTPException(status_code=401, detail="Invalid MFA code.")
+	if enable: user.mfa_enabled = True
+	csrf = _rotate_session(request, response, db, user, assurance)
+	record_audit_event(db, actor=principal.audit_identity, action="MFA_VERIFIED", resource=f"user:{user.username}",
+		metadata={"assurance": assurance}, request_id=getattr(request.state, "request_id", None))
+	db.commit()
+	return {"mfa_enabled": user.mfa_enabled, "mfa_assurance": assurance, "csrf_token": csrf}
+
+
+@router.post("/auth/mfa/confirm")
+def confirm_mfa(payload: MFACodeRequest, request: Request, response: Response,
+	principal: OperatorPrincipal = Depends(require_api_key), db: Session = Depends(get_db)):
+	return _complete_mfa(payload.code, request, response, principal, db, enable=True)
+
+
+@router.post("/auth/mfa/verify")
+def verify_mfa(payload: MFACodeRequest, request: Request, response: Response,
+	principal: OperatorPrincipal = Depends(require_api_key), db: Session = Depends(get_db)):
+	user = db.get(UserRecord, principal.user_id)
+	if user is None or not user.mfa_enabled:
+		raise HTTPException(status_code=409, detail="MFA is not enabled.")
+	return _complete_mfa(payload.code, request, response, principal, db, enable=False)
 
 
 @router.get("/users", response_model=list[UserRead])

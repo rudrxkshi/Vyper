@@ -312,6 +312,8 @@ def create_central_job(agent_id: str, payload: CentralJobCreate, principal: Oper
 		raise HTTPException(status_code=403, detail="Central destructive authorization is required.")
 	if not payload.dry_run and payload.destructive_confirmation != "SANITIZE":
 		raise HTTPException(status_code=422, detail="Destructive confirmation must exactly equal SANITIZE.")
+	if not payload.dry_run and not principal.development_identity and principal.mfa_assurance not in {"TOTP", "RECOVERY"}:
+		raise HTTPException(status_code=403, detail="An MFA-authenticated operator session is required for destructive central jobs.")
 	existing = db.execute(
 		select(CentralJobRecord).where(CentralJobRecord.agent_id == agent_id, CentralJobRecord.idempotency_key == payload.idempotency_key)
 	).scalar_one_or_none()

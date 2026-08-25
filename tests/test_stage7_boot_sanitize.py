@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,10 +13,38 @@ from agent.command_runner import CommandResult
 from agent.profiler import DeviceProfile
 from local_agent.boot_handoff import BootImage, GrubOneShotHandoff
 from local_agent.boot_image import build_fixture_boot_image
+from local_agent.initramfs import build_newc
 from local_agent.boot_sanitize import (
 	BootIntegrityError, BootJobError, BootJobStore, BootSanitizeRuntime, BootTargetValidationError,
 )
 from local_agent.system_disk import SystemDiskService
+
+
+def _newc_modes(archive: bytes) -> dict[str, int]:
+	offset = 0
+	entries = {}
+	while True:
+		header = archive[offset:offset + 110]
+		assert header[:6] == b"070701"
+		fields = [int(header[6 + index * 8:14 + index * 8], 16) for index in range(13)]
+		mode, size, name_size = fields[1], fields[6], fields[11]
+		offset += 110
+		name = archive[offset:offset + name_size - 1].decode("utf-8")
+		offset = (offset + name_size + 3) & ~3
+		entries[name] = mode
+		offset = (offset + size + 3) & ~3
+		if name == "TRAILER!!!":
+			return entries
+
+
+def test_personalized_newc_contains_required_parent_directories():
+	entries = _newc_modes(build_newc({
+		"etc/vyper/active-boot-job": (b"job\n", 0o600),
+		"var/lib/vyper/boot-jobs/job/state.json": (b"{}", 0o600),
+	}))
+	for directory in ("etc", "etc/vyper", "var/lib/vyper/boot-jobs/job"):
+		assert stat.S_ISDIR(entries[directory])
+	assert stat.S_ISREG(entries["etc/vyper/active-boot-job"])
 
 
 def _device(path="/dev/sda", *, serial="SYSTEM-001", model="Test Disk", size=1024 * 1024,
@@ -300,6 +329,15 @@ def test_system_disk_prepare_uses_fixture_without_applying_and_preserves_default
 	assert prepared["state"]["status"] == "AWAITING_REBOOT"
 	assert prepared["handoff"]["normal_default_unchanged"] is True
 	assert (tmp_path / "boot" / "jobs" / prepared["boot_job"]["boot_job_id"] / "initramfs.img").is_file()
+
+
+@pytest.mark.parametrize(("separate_boot", "expected_prefix"), [(False, "/boot/vyper"), (True, "/vyper")])
+def test_system_disk_grub_path_matches_boot_filesystem_layout(tmp_path, separate_boot, expected_prefix):
+	service = SystemDiskService(discovery=Discovery([]), store=BootJobStore(tmp_path / "jobs"),
+		handoff=GrubOneShotHandoff(command_executor=Executor(), grub_script_path=tmp_path / "grub"),
+		boot_image_manifest=tmp_path / "manifest.json", boot_directory="/boot/vyper",
+		boot_mount_is_separate=separate_boot)
+	assert service.grub_boot_directory().as_posix() == expected_prefix
 
 
 def test_non_destructive_disk_image_fixture_is_unchanged(tmp_path):

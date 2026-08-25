@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Sequence
 
@@ -8,6 +9,17 @@ from agent.common import SanitizationResult, SanitizationStatus
 from agent.nvme_status import parse_sanitize_log, sanitize_log_command
 from agent.pathways.base import SanitizationPathway
 from agent.profiler import DeviceProfile
+
+
+NVME_SANACT_BY_METHOD = {
+    "CRYPTO_ERASE": "4",
+    "BLOCK_ERASE": "2",
+    "OVERWRITE": "3",
+}
+
+
+def sanact_for_method(method: str) -> str | None:
+    return NVME_SANACT_BY_METHOD.get(str(method or "").strip().upper())
 
 
 class NVMeSanitizePathway(SanitizationPathway):
@@ -32,6 +44,7 @@ class NVMeSanitizePathway(SanitizationPathway):
         authorized: bool = False,
         system_associated: bool | None = None,
         selected_method: str | None = None,
+        controller_scope: dict[str, Any] | None = None,
     ) -> SanitizationResult:
         if not target or not str(target).strip():
             return self._failed_result(target, "No target device was provided.")
@@ -62,6 +75,16 @@ class NVMeSanitizePathway(SanitizationPathway):
         if not authorized:
             return self._failed_result(target, "NVMe sanitize requires explicit authorization.")
 
+        if controller_scope is None and isinstance(profile.capabilities, dict):
+            candidate_scope = profile.capabilities.get("controller_scope")
+            controller_scope = candidate_scope if isinstance(candidate_scope, dict) else None
+        scope_issue = self._controller_scope_issue(target, method, controller_scope)
+        if scope_issue:
+            return self._unsupported_result(target, scope_issue)
+        scope = controller_scope or {}
+        controller_target = str(scope["sanitize_target"])
+        controller_namespaces = list(scope.get("controller_namespaces") or [])
+
         if self.dry_run:
             return SanitizationResult(
                 status=SanitizationStatus.RUNNING,
@@ -74,6 +97,14 @@ class NVMeSanitizePathway(SanitizationPathway):
                     "device": target,
                     "device_type": "NVMe",
                     "sanitize_method": method,
+                    "sanact": sanact_for_method(method),
+                    "requested_namespace": target,
+                    "resolved_controller": controller_target,
+                    "sanitize_target": controller_target,
+                    "sanitize_scope": "controller",
+                    "controller_namespaces": controller_namespaces,
+                    "selected_method": method,
+                    "effective_sanact": sanact_for_method(method),
                     "start_time": None,
                     "end_time": None,
                     "duration_seconds": 0.0,
@@ -82,7 +113,7 @@ class NVMeSanitizePathway(SanitizationPathway):
                 },
             )
 
-        command = self._build_command(method, target)
+        command = self._build_command(method, controller_target)
         if command is None:
             return self._unsupported_result(target, f"Unsupported NVMe sanitize method: {method!r}.")
 
@@ -103,13 +134,21 @@ class NVMeSanitizePathway(SanitizationPathway):
         if not submission.success:
             return self._failed_result(target, self._format_command_failure("sanitize", submission))
 
-        status = self._poll_sanitize_status(target, method, start)
+        status = self._poll_sanitize_status(controller_target, method, start)
         end = time.monotonic()
         metadata = {
             "method": "NVME_SANITIZE",
             "device": target,
             "device_type": "NVMe",
             "sanitize_method": method,
+            "sanact": sanact_for_method(method),
+            "requested_namespace": target,
+            "resolved_controller": controller_target,
+            "sanitize_target": controller_target,
+            "sanitize_scope": "controller",
+            "controller_namespaces": controller_namespaces,
+            "selected_method": method,
+            "effective_sanact": sanact_for_method(method),
             "start_time": start,
             "end_time": end,
             "duration_seconds": max(0.0, end - start),
@@ -158,6 +197,28 @@ class NVMeSanitizePathway(SanitizationPathway):
             return False
         return self._normalize_device_path(target) == self._normalize_device_path(profile.device_path)
 
+    def _controller_scope_issue(self, namespace: str, method: str, scope: dict[str, Any] | None) -> str | None:
+        if not isinstance(scope, dict) or scope.get("scope_proven") is not True or scope.get("execution_eligible") is not True:
+            blockers = scope.get("execution_blockers") if isinstance(scope, dict) else None
+            return str((blockers or ["NVMe namespace/controller scope is not proven."])[0])
+        controller = str(scope.get("sanitize_target") or "")
+        if not re.fullmatch(r"/dev/nvme\d+", controller):
+            return "Resolved NVMe sanitize target is not a controller character-device path."
+        if scope.get("sanitize_scope") != "controller" or scope.get("resolved_controller") != controller:
+            return "NVMe controller scope metadata is inconsistent."
+        namespaces = list(scope.get("controller_namespaces") or [])
+        if namespaces != [namespace]:
+            return "NVMe controller must expose exactly the selected safe namespace; controller-wide impact is otherwise refused."
+        sanicap = scope.get("controller_sanicap") if isinstance(scope.get("controller_sanicap"), dict) else {}
+        supported = {
+            "CRYPTO_ERASE": sanicap.get("crypto_erase") is True,
+            "BLOCK_ERASE": sanicap.get("block_erase") is True,
+            "OVERWRITE": sanicap.get("overwrite") is True,
+        }.get(method, False)
+        if not supported:
+            return f"Controller SANICAP does not support policy-selected method {method}; no fallback is allowed."
+        return None
+
     def _normalize_device_path(self, path: str) -> str:
         return str(path).strip().rstrip("/")
 
@@ -189,11 +250,7 @@ class NVMeSanitizePathway(SanitizationPathway):
         }.get(normalized)
 
     def _build_command(self, method: str, target: str) -> list[str] | None:
-        sanact = {
-            "CRYPTO_ERASE": "4",
-            "BLOCK_ERASE": "2",
-            "OVERWRITE": "3",
-        }.get(method)
+        sanact = sanact_for_method(method)
         if sanact is None:
             return None
         return ["nvme", "sanitize", target, "-a", sanact]

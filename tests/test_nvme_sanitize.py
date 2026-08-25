@@ -7,8 +7,11 @@ import pytest
 
 from agent.command_runner import CommandResult
 from agent.common import SanitizationStatus
+from agent.evidence import EvidenceCollector
 from agent.pathways.nvme_sanitize import NVMeSanitizePathway
+from agent.policy import PolicyDecision
 from agent.profiler import DeviceProfile
+from agent.verifier import VerificationResult
 
 
 class RecordingExecutor:
@@ -33,8 +36,30 @@ def _nvme_profile(**kwargs):
         "capabilities": {
             "sanicap": {"crypto_erase": True, "block_erase": True, "overwrite": True},
             "crypto_erase_applicable": True,
+            "controller_scope": {
+                "scope_proven": True,
+                "execution_eligible": True,
+                "requested_namespace": "/dev/nvme0n1",
+                "resolved_controller": "/dev/nvme0",
+                "sanitize_target": "/dev/nvme0",
+                "sanitize_scope": "controller",
+                "controller_namespaces": ["/dev/nvme0n1"],
+                "controller_sanicap": {"crypto_erase": True, "block_erase": True, "overwrite": True},
+                "execution_blockers": [],
+            },
         },
     }
+    if "capabilities" in kwargs:
+        supplied = kwargs["capabilities"]
+        sanicap = supplied.get("sanicap") or {}
+        supplied["controller_scope"] = {
+            **defaults["capabilities"]["controller_scope"],
+            "controller_sanicap": {
+                "crypto_erase": sanicap.get("crypto_erase") is True,
+                "block_erase": sanicap.get("block_erase") is True,
+                "overwrite": sanicap.get("overwrite") is True,
+            },
+        }
     defaults.update(kwargs)
     return DeviceProfile(**defaults)
 
@@ -166,7 +191,41 @@ def test_selected_method_builds_the_exact_sanitize_argv(selected_method, expecte
 
     assert result.status == SanitizationStatus.RUNNING
     assert result.metadata["sanitize_method"] == expected_method
-    assert executor.calls[0]["command"] == ["nvme", "sanitize", "/dev/nvme0n1", "-a", expected_action]
+    assert executor.calls[0]["command"] == ["nvme", "sanitize", "/dev/nvme0", "-a", expected_action]
+
+
+def test_controller_scope_metadata_preserves_requested_namespace():
+    pathway = NVMeSanitizePathway(dry_run=True)
+    result = pathway.execute("/dev/nvme0n1", profile=_nvme_profile(), authorized=True, selected_method="CRYPTO_ERASE")
+    assert result.target_device == "/dev/nvme0n1"
+    assert result.metadata == {
+        **result.metadata,
+        "requested_namespace": "/dev/nvme0n1",
+        "resolved_controller": "/dev/nvme0",
+        "sanitize_target": "/dev/nvme0",
+        "sanitize_scope": "controller",
+        "controller_namespaces": ["/dev/nvme0n1"],
+        "selected_method": "CRYPTO_ERASE",
+        "effective_sanact": "4",
+    }
+    verification = VerificationResult(status=SanitizationStatus.INCONCLUSIVE, device="/dev/nvme0n1",
+        pathway="CRYPTO_ERASE", verified=False)
+    evidence = EvidenceCollector().create_record(device_profile=_nvme_profile(),
+        policy_decision=PolicyDecision(selected_pathway="CRYPTO_ERASE", device_type="NVMe"),
+        execution_result=result, verification_result=verification)
+    assert evidence.device == "/dev/nvme0n1"
+    assert evidence.execution["metadata"]["resolved_controller"] == "/dev/nvme0"
+    assert evidence.execution["metadata"]["sanitize_target"] == "/dev/nvme0"
+
+
+def test_unproven_or_multi_namespace_scope_never_executes():
+    executor = RecordingExecutor()
+    pathway = NVMeSanitizePathway(dry_run=False, command_executor=executor)
+    scope = {**_nvme_profile().capabilities["controller_scope"],
+        "controller_namespaces": ["/dev/nvme0n1", "/dev/nvme0n2"]}
+    result = pathway.execute("/dev/nvme0n1", profile=_nvme_profile(), authorized=True,
+        selected_method="CRYPTO_ERASE", controller_scope=scope)
+    assert result.status == SanitizationStatus.UNSUPPORTED and executor.calls == []
 
 
 def test_unknown_selected_method_is_rejected_without_a_command():
@@ -301,7 +360,7 @@ def test_destructive_command_goes_through_command_executor():
         result = pathway.execute("/dev/nvme0n1", profile=profile, authorized=True)
 
     assert result.status == SanitizationStatus.RUNNING
-    assert executor.calls and executor.calls[0]["command"][:3] == ["nvme", "sanitize", "/dev/nvme0n1"]
+    assert executor.calls and executor.calls[0]["command"][:3] == ["nvme", "sanitize", "/dev/nvme0"]
 
 
 def test_no_generic_host_overwrite_is_executed():

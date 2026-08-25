@@ -4,7 +4,7 @@ import inspect
 import json
 import logging
 import os
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
@@ -51,13 +51,51 @@ def result_payload(result: Any, *, secrets: tuple[str, ...] = ()) -> dict[str, A
 	if isinstance(result, dict):
 		payload = result
 	elif is_dataclass(result):
-		payload = asdict(result)
+		payload = _plain_value(result)
 	else:
 		raise TypeError("VYPERAgent returned an unsupported result type.")
 	encoded = jsonable_encoder(payload)
 	if not isinstance(encoded, dict):
 		raise TypeError("VYPERAgent result did not encode to an object.")
-	return redact(encoded, secrets)
+	return redact(_terminal_reporting_view(encoded), secrets)
+
+
+def _terminal_reporting_view(payload: dict[str, Any]) -> dict[str, Any]:
+	"""Label raw pathway state and expose a non-contradictory terminal view.
+
+	Pathways may return RUNNING to mean that the command phase completed and is
+	ready for verification. That raw evidence is retained, but must not look like
+	an active operation once orchestration has reached a terminal state.
+	"""
+	evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+	terminal = str(evidence.get("final_status") or payload.get("final_status") or payload.get("job_state") or "")
+	if terminal not in TERMINAL_STATES:
+		return payload
+	payload["orchestration_terminal_status"] = terminal
+	execution = payload.get("execution")
+	if isinstance(execution, dict):
+		raw_status = str(execution.get("status") or "")
+		execution["raw_status"] = raw_status
+		execution["status"] = terminal
+		execution["status_scope"] = "orchestration_terminal"
+	payload["execution_status_semantics"] = {
+		"execution.status": "orchestration_terminal",
+		"execution.raw_status": "raw_pathway_historical",
+		"evidence.execution.status": "raw_pathway_historical",
+		"certificate.execution.status": "raw_pathway_historical",
+	}
+	return payload
+
+
+def _plain_value(value: Any) -> Any:
+	"""Convert dataclasses and collection subclasses without reconstructing them."""
+	if is_dataclass(value) and not isinstance(value, type):
+		return {field.name: _plain_value(getattr(value, field.name)) for field in fields(value)}
+	if isinstance(value, dict):
+		return {key: _plain_value(item) for key, item in value.items()}
+	if isinstance(value, (list, tuple, set, frozenset)):
+		return [_plain_value(item) for item in value]
+	return value
 
 
 def log_job(event: str, **fields: Any) -> None:

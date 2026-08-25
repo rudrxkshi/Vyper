@@ -1,6 +1,6 @@
 {
   "versions": {
-    "product": "0.8.0-rc1",
+    "product": "1.0.0-rc1",
     "local_api": "2",
     "agent_protocol": "1"
   },

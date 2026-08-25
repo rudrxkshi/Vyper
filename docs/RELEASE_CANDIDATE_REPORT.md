@@ -1,16 +1,16 @@
-# VYPER 0.8.0-rc1 release-candidate report
+# VYPER 1.0.0-rc1 release-candidate report
 
 ## Recommendation
 
 **READY_FOR_DEMO** and **READY_FOR_CONTROLLED_HARDWARE_TEST** using disposable media under [HARDWARE_VALIDATION_PLAN.md](HARDWARE_VALIDATION_PLAN.md).
 
-**NOT_READY_FOR_PRODUCTION.** Physical ATA/NVMe coverage, bootable initramfs/GRUB validation, managed release signing, MFA, and production operational evidence remain incomplete.
+**NOT READY FOR AN OVERALL PRODUCTION CLAIM.** Non-physical security and deployment controls are implemented, and the Ubuntu/VirtualBox boot workflow is validated. Physical HDD, SATA SSD, and NVMe firmware validation remains pending.
 
 ## Validation summary
 
-Final command results for this workspace on 2026-08-25:
+Final Stage 13 command results for this workspace on 2026-08-26:
 
-- Full Python suite: **283 passed, 1 skipped**. The skip is the explicitly
+- Full Python suite: **428 passed, 1 skipped**. The skip is the explicitly
   conditional PostgreSQL transaction test; one third-party FastAPI/TestClient
   deprecation warning was emitted.
 - Dedicated Stage 7 suite: **29 passed** using mocks and non-destructive
@@ -19,7 +19,7 @@ Final command results for this workspace on 2026-08-25:
 - ESLint: **passed**. Next.js production build: **passed** (three static
   routes).
 - SQLite migration: **passed** from an empty temporary database to Alembic
-  revision `0001_stage6_baseline`.
+  revision `0002_stage13_mfa_sessions`.
 - PostgreSQL migration/rollback: **not run locally** because this Windows host
   has no Docker, WSL distribution, PostgreSQL service, or
   `VYPER_TEST_POSTGRES_URL`. The release CI gate provisions PostgreSQL 17 and
@@ -27,14 +27,18 @@ Final command results for this workspace on 2026-08-25:
   a pass.
 - Dependency audits: Python `pip-audit` reported no known vulnerabilities;
   `npm audit --audit-level=high` reported 0 vulnerabilities.
-- Packaging/fresh-install/upgrade suite: **15 passed** in temporary roots; no
+- Focused Stage 13/security/packaging suite: **32 passed, 1 skipped** in temporary roots; no
   real systemd installation occurred.
 - Stage 8 contract/artifact suite: **2 passed**. Release checksum, manifest
   version, required contents, forbidden paths/suffixes, and secret markers
   validated successfully.
-- Boot artifact: the deterministic **non-bootable test fixture** passed hash,
-  version, component, and no-credential checks. A real initramfs/GRUB image was
-  not buildable or boot-tested on this host.
+- Release artifact and CycloneDX SBOM passed checksum, manifest, dependency,
+  forbidden-path, and secret-marker validation. The distributable remains
+  explicitly `UNSIGNED / CHECKSUM_ONLY` until an operator attaches an Ed25519
+  signature from an external key and configures the matching trusted key.
+- Boot artifact and VirtualBox system-HDD lifecycle are VM validated by retained
+  Stage 10/11 evidence. Secure Boot status on this Windows validation host is
+  `UNKNOWN` because `mokutil` is unavailable; no key enrollment was attempted.
 - `git diff --check`: passed; Git emitted line-ending conversion notices only.
 
 ## Supported flows
@@ -51,10 +55,18 @@ All 14 security invariants in [FINAL_AUDIT.md](FINAL_AUDIT.md) are **PASS** in
 source review and automated tests. HDD, ATA Secure Erase, and NVMe sanitize
 flows pass mocked/image validation but remain untested on physical hardware.
 SATA crypto erase remains explicitly unsupported. System-disk sanitization is
-partial: manifest, identity, replay, confirmation, dry-run, and isolated result
-handling pass, while real GRUB/initramfs/Secure Boot and hardware execution are
-untested.
+VM validated for the VirtualBox HDD workflow; Secure Boot and physical HDD,
+SATA SSD, and NVMe firmware execution remain unvalidated.
 
 Known limitations are maintained in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md);
 the controlled next step is the disposable-media procedure in
 [HARDWARE_VALIDATION_PLAN.md](HARDWARE_VALIDATION_PLAN.md).
+# Stage 13 readiness classification
+
+- `PRODUCTION_READY_COMPONENT`: typed Unix-socket root-helper boundary; central MFA/session enforcement; Ed25519 verification; deterministic SBOM generation; PostgreSQL migration and backup/restore harnesses; non-root containers and health/readiness paths.
+- `SOFTWARE_VALIDATED`: HDD/ATA/NVMe policy, routing, safety, evidence, certificate, API, persistence, boot tooling, and security regression tests use mocks or fixtures where destructive behavior would otherwise occur.
+- `VM_VALIDATED`: real Ubuntu initramfs dry-run and destructive VirtualBox system-HDD workflow passed.
+- `PHYSICAL_VALIDATION_PENDING`: physical HDD, SATA SSD, and NVMe controller/firmware behavior has not been validated.
+- `PRODUCTION_BLOCKER`: model-specific physical validation and organization-specific Secure Boot key enrollment remain required before a universal production claim.
+
+VYPER 1.0.0-rc1 is not declared generally production-ready; the 1.0 RC version does not replace missing physical, Secure Boot, PostgreSQL, or container evidence.

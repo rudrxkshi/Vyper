@@ -3,7 +3,7 @@ from __future__ import annotations
 import hmac
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Callable
 
@@ -29,6 +29,7 @@ class OperatorPrincipal:
 	username: str
 	role: OperatorRole
 	development_identity: bool = False
+	mfa_assurance: str = "PASSWORD"
 
 	@property
 	def audit_identity(self) -> str:
@@ -47,13 +48,17 @@ def _session_principal(token: str | None, db: Session) -> OperatorPrincipal | No
 	if record is None or record.revoked_at is not None:
 		return None
 	expires = record.expires_at.replace(tzinfo=record.expires_at.tzinfo or timezone.utc)
-	if expires <= now:
+	absolute = record.absolute_expires_at.replace(tzinfo=record.absolute_expires_at.tzinfo or timezone.utc)
+	idle_seconds = int(os.getenv("VYPER_SESSION_IDLE_SECONDS", "1800"))
+	last_seen = record.last_seen_at.replace(tzinfo=record.last_seen_at.tzinfo or timezone.utc)
+	if expires <= now or absolute <= now or last_seen + timedelta(seconds=idle_seconds) <= now:
+		record.revoked_at = now
 		return None
 	user = db.get(UserRecord, record.user_id)
 	if user is None or user.disabled_at is not None:
 		return None
 	record.last_seen_at = now
-	return OperatorPrincipal(user.id, user.username, OperatorRole(user.role))
+	return OperatorPrincipal(user.id, user.username, OperatorRole(user.role), False, record.mfa_assurance)
 
 
 def require_api_key(
@@ -65,6 +70,11 @@ def require_api_key(
 	token = session_cookie or (credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else None)
 	principal = _session_principal(token, db)
 	if principal:
+		if production_mode() and session_cookie and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+			csrf = request.headers.get("X-CSRF-Token")
+			record = db.execute(select(OperatorSessionRecord).where(OperatorSessionRecord.token_hash == token_digest(session_cookie))).scalar_one()
+			if not csrf or not hmac.compare_digest(token_digest(csrf), record.csrf_token_hash):
+				raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF validation failed.")
 		request.state.operator = principal
 		return principal
 

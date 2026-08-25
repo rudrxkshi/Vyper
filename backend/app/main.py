@@ -28,8 +28,23 @@ from .routers.downloads import router as downloads_router
 from .routers.jobs import router as jobs_router
 from .routers.results import router as results_router
 
+SUPPORTED_ALEMBIC_HEAD = "0002_stage13_mfa_sessions"
+
+
+def require_supported_schema(engine) -> None:
+	with engine.connect() as connection:
+		try:
+			current = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+		except Exception as exc:
+			raise RuntimeError("Production database schema is unavailable; run Alembic migrations.") from exc
+	if current != SUPPORTED_ALEMBIC_HEAD:
+		raise RuntimeError(f"Production database schema must be at supported Alembic head {SUPPORTED_ALEMBIC_HEAD}.")
+
 
 def create_app(*, database_url: str | None = None, agent_gateway=None) -> FastAPI:
+	metrics_mode = os.getenv("VYPER_METRICS_MODE", "single-worker")
+	if production_mode() and metrics_mode != "single-worker":
+		raise RuntimeError("Production process-local metrics require VYPER_METRICS_MODE=single-worker.")
 	resolved_database_url = database_url or default_database_url()
 	engine, session_factory = create_engine_and_session_factory(resolved_database_url)
 	app_state = {
@@ -45,7 +60,9 @@ def create_app(*, database_url: str | None = None, agent_gateway=None) -> FastAP
 		app.state.session_factory = app_state["session_factory"]
 		app.state.agent_gateway = app_state["agent_gateway"]
 		app.state.database_url = app_state["database_url"]
-		if not production_mode() and os.getenv("VYPER_AUTO_CREATE_SCHEMA", "true").lower() in {"1", "true", "yes"}:
+		if production_mode():
+			require_supported_schema(app.state.engine)
+		elif os.getenv("VYPER_AUTO_CREATE_SCHEMA", "true").lower() in {"1", "true", "yes"}:
 			init_db(app.state.engine)
 		yield
 
@@ -113,6 +130,7 @@ def create_app(*, database_url: str | None = None, agent_gateway=None) -> FastAP
 		with metrics_lock:
 			snapshot = dict(metrics)
 		return "\n".join([
+			f'# VYPER metrics_mode={metrics_mode}; process-local counters require one backend worker',
 			"# TYPE vyper_http_requests_total counter",
 			f"vyper_http_requests_total {snapshot['requests_total']}",
 			"# TYPE vyper_http_errors_total counter",

@@ -7,9 +7,14 @@ import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
+
 from fastapi.testclient import TestClient
 
+from agent.agent import OrchestrationJobResult, _ObservableStateHistory
+from agent.common import JobState
 from agent.discovery import DiscoveredDevice
+from local_agent.jobs import result_payload
 from local_agent.main import create_app
 from local_agent.storage import LocalJobStore
 
@@ -35,6 +40,33 @@ class DeferredExecutor:
 		function(*args)
 
 
+def test_result_payload_flattens_observable_state_history():
+	result = OrchestrationJobResult(
+		job_state=JobState.CANCELLED,
+		state_history=_ObservableStateHistory([JobState.PENDING, JobState.CANCELLED], None),
+		target="/dev/mock",
+	)
+	payload = result_payload(result)
+	assert payload["job_state"] == "CANCELLED"
+	assert payload["state_history"] == ["PENDING", "CANCELLED"]
+
+
+@pytest.mark.parametrize(("state", "dry_run", "terminal"), [
+	("VERIFIED", False, "VERIFIED"),
+	("FAILED", False, "FAILED"),
+	("INCONCLUSIVE", False, "INCONCLUSIVE"),
+	("CANCELLED", True, "INCONCLUSIVE"),
+])
+def test_terminal_payload_scopes_raw_execution_status(state, dry_run, terminal):
+	payload = result_payload(_result("/dev/mock", state, dry_run=dry_run, verified=state == "VERIFIED"))
+	assert payload["orchestration_terminal_status"] == terminal
+	assert payload["execution"]["status"] == terminal
+	assert payload["execution"]["raw_status"] == "RUNNING"
+	assert payload["execution"]["status_scope"] == "orchestration_terminal"
+	assert payload["evidence"]["execution"]["status"] == "RUNNING"
+	assert payload["execution_status_semantics"]["evidence.execution.status"] == "raw_pathway_historical"
+
+
 def _result(target, state="VERIFIED", *, method="HDD_OVERWRITE", dry_run=False, verified=True):
 	final_status = "VERIFIED" if state == "VERIFIED" else state
 	if state == "CANCELLED":
@@ -47,10 +79,11 @@ def _result(target, state="VERIFIED", *, method="HDD_OVERWRITE", dry_run=False, 
 		"policy": {"selected_pathway": method},
 		"execution": {"status": "RUNNING", "dry_run": dry_run, "metadata": {"method": method}},
 		"verification": {"status": final_status, "verified": verified},
-		"evidence": {"final_status": final_status},
+		"evidence": {"final_status": final_status, "execution": {"status": "RUNNING"}},
 		"certificate": {
 			"outcome_kind": "sanitization_certificate" if final_status == "VERIFIED" else "outcome_report",
 			"successful_sanitization_claim": final_status == "VERIFIED",
+			"execution": {"status": "RUNNING"},
 		},
 		"message": "Workflow completed.",
 	}

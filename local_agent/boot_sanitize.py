@@ -20,10 +20,11 @@ from agent.discovery import DeviceDiscovery
 from agent.policy import PolicyEngine
 
 from .jobs import redact, result_payload
+from vyper_version import __version__
 
 
 BOOT_JOB_VERSION = "1"
-BOOT_ENVIRONMENT_VERSION = "0.8.0-rc1"
+BOOT_ENVIRONMENT_VERSION = __version__
 TERMINAL_BOOT_STATES = {"VERIFIED", "FAILED", "INCONCLUSIVE", "CANCELLED", "EXPIRED"}
 
 
@@ -66,6 +67,24 @@ def sha256_file(path: str | Path) -> str:
 		for chunk in iter(lambda: handle.read(1024 * 1024), b""):
 			digest.update(chunk)
 	return digest.hexdigest()
+
+
+def durable_write_text(path: str | Path, text: str, *, mode: int = 0o600) -> None:
+	path = Path(path)
+	path.parent.mkdir(parents=True, exist_ok=True)
+	with path.open("w", encoding="utf-8") as handle:
+		handle.write(text)
+		handle.flush()
+		os.fsync(handle.fileno())
+	os.chmod(path, mode)
+	try:
+		directory_fd = os.open(path.parent, os.O_RDONLY)
+		try:
+			os.fsync(directory_fd)
+		finally:
+			os.close(directory_fd)
+	except OSError:
+		pass
 
 
 def _text(value: Any) -> str | None:
@@ -228,7 +247,7 @@ class BootJobStore:
 
 	def create(self, *, device: dict[str, Any], boot_image_path: str | Path, central_job_id: str | None = None,
 		agent_id: str | None = None, central_api_url: str | None = None, requested_method: str = "POLICY", dry_run: bool = False,
-		expires_in_seconds: int = 3600) -> dict[str, Any]:
+		expires_in_seconds: int = 3600, vm_validation: dict[str, Any] | None = None) -> dict[str, Any]:
 		identifiers = device_identifiers(device)
 		confidence = identity_confidence(identifiers)
 		if confidence == "LOW":
@@ -248,6 +267,7 @@ class BootJobStore:
 			"boot_image_version": BOOT_ENVIRONMENT_VERSION, "boot_image_sha256": sha256_file(boot_image_path),
 			"job_nonce": secrets.token_urlsafe(32), "execution_mode": ExecutionMode.BOOT_SANITIZE_MODE.value,
 			"ata_password_transfer": "NOT_STORED_REENTER_IN_BOOT_ENVIRONMENT",
+			"vm_validation": redact(vm_validation) if vm_validation else None,
 		}
 		document = self._sign(payload)
 		job_dir = self.root / payload["boot_job_id"]
@@ -264,6 +284,8 @@ class BootJobStore:
 		integrity = document.get("integrity")
 		if not isinstance(payload, dict) or not isinstance(integrity, dict):
 			raise BootIntegrityError("Boot job manifest shape is invalid.")
+		if str(payload.get("schema_version") or "") != BOOT_JOB_VERSION:
+			raise BootIntegrityError("Unsupported boot job manifest schema version.")
 		expected = self._mac(payload)
 		if integrity.get("algorithm") != "HMAC-SHA256" or not hmac.compare_digest(str(integrity.get("mac") or ""), expected):
 			raise BootIntegrityError("Boot job manifest authentication failed.")
@@ -325,9 +347,16 @@ class BootJobStore:
 
 	def _write(self, path: Path, value: dict[str, Any], mode: int) -> None:
 		temporary = path.with_suffix(path.suffix + ".tmp")
-		temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-		os.chmod(temporary, mode)
+		durable_write_text(temporary, json.dumps(value, indent=2, sort_keys=True) + "\n", mode=mode)
 		temporary.replace(path)
+		try:
+			directory_fd = os.open(path.parent, os.O_RDONLY)
+			try:
+				os.fsync(directory_fd)
+			finally:
+				os.close(directory_fd)
+		except OSError:
+			pass
 
 
 class BootSanitizeRuntime:
@@ -335,7 +364,8 @@ class BootSanitizeRuntime:
 		safety_inspector: SafetyInspector, agent: VYPERAgent | Any,
 		result_directory: str | Path, upload_result: Callable[[dict[str, Any]], bool] | None = None,
 		report_event: Callable[[str, int], None] | None = None,
-		durable_result_storage: bool = False) -> None:
+		durable_result_storage: bool = False,
+		validation_guard: Callable[[dict[str, Any], BootTarget], dict[str, Any]] | None = None) -> None:
 		self.store = store
 		self.discovery = discovery
 		self.safety_inspector = safety_inspector
@@ -344,6 +374,7 @@ class BootSanitizeRuntime:
 		self.upload_result = upload_result
 		self.report_event = report_event
 		self.durable_result_storage = durable_result_storage
+		self.validation_guard = validation_guard
 
 	def _transition(self, boot_job_id: str, status: str, **fields: Any) -> dict[str, Any]:
 		state = self.store.transition(boot_job_id, status, **fields)
@@ -391,6 +422,7 @@ class BootSanitizeRuntime:
 		target = self.identify_target(document)
 		self._transition(boot_job_id, "VALIDATING_TARGET", observed_target=target.device_path,
 			observed_identifiers=target.identifiers, identity_confidence=target.confidence)
+		validation_context = self.validation_guard(document, target) if self.validation_guard else None
 		warnings = self.validate_target(target)
 		self._transition(boot_job_id, "WAITING_LOCAL_APPROVAL", warnings=warnings)
 		expected_confirmation = f"ERASE {boot_job_id[-8:]}"
@@ -423,12 +455,15 @@ class BootSanitizeRuntime:
 				raise BootJobError("Native engine exited without terminal evidence; outcome is INCONCLUSIVE.") from exc
 		finally:
 			authorization.clear()
+		self._transition(boot_job_id, "VERIFYING")
 		status = str((payload.get("evidence") or {}).get("final_status") or payload.get("final_status") or payload.get("job_state") or "INCONCLUSIVE")
 		if status not in {"VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"}:
 			status = "INCONCLUSIVE"
 		evidence = {
 			"execution_environment": "boot_sanitize", "boot_job_id": boot_job_id,
+			"local_job_id": payload.get("local_job_id") or boot_job_id,
 			"central_job_id": document["payload"].get("central_job_id"),
+			"agent_id": document["payload"].get("agent_id"),
 			"boot_environment_version": BOOT_ENVIRONMENT_VERSION,
 			"boot_image_sha256": document["payload"]["boot_image_sha256"],
 			"target_identifiers_before": target.identifiers,
@@ -436,7 +471,8 @@ class BootSanitizeRuntime:
 			"selected_pathway": (payload.get("policy") or {}).get("selected_pathway"),
 			"execution": payload.get("execution"), "verification": payload.get("verification"),
 			"engine_evidence": payload.get("evidence"), "certificate": payload.get("certificate"),
-			"warnings": warnings, "final_status": status, "completed_at": iso(utc_now()),
+			"vm_validation": validation_context, "warnings": warnings, "final_status": status,
+			"completed_at": iso(utc_now()),
 		}
 		uploaded = bool(self.upload_result and self.upload_result(evidence))
 		evidence["upload_status"] = (
@@ -447,7 +483,6 @@ class BootSanitizeRuntime:
 		self.result_directory.mkdir(parents=True, exist_ok=True)
 		result_path = self.result_directory / f"{boot_job_id}.result.json"
 		evidence["result_path"] = str(result_path)
-		result_path.write_text(json.dumps(redact(evidence), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-		os.chmod(result_path, 0o600)
+		durable_write_text(result_path, json.dumps(redact(evidence), indent=2, sort_keys=True) + "\n")
 		self._transition(boot_job_id, status, result=redact(evidence), local_confirmation_state="CONFIRMED_IN_BOOT_ENVIRONMENT")
 		return evidence

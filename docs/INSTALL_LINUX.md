@@ -2,7 +2,7 @@
 
 Stage 5 supports Ubuntu/Debian x86_64 with Python 3.11 or newer and systemd.
 
-1. Download `vyper-local-console-linux-x86_64.tar.gz` and its checksum.
+1. Download `vyper-local-console-linux-x86_64-1.0.0-rc1.tar.gz` and its checksum.
 2. Run `sha256sum -c checksums.txt`.
 3. Extract the archive.
 4. Run `sudo ./install.sh`.

@@ -28,7 +28,8 @@ def _secure_boot_compatible(kernel: Path) -> bool:
 
 
 def write_manifest(output_dir: Path, *, kernel: Path, initramfs: Path, bootable: bool,
-	secure_boot_compatible: bool, build_kind: str) -> Path:
+	secure_boot_compatible: bool, build_kind: str, kernel_version: str | None = None,
+	included_components: list[str] | None = None) -> Path:
 	build_epoch = int(os.getenv("SOURCE_DATE_EPOCH", "1787529600"))
 	payload: dict[str, Any] = {
 		"product": "VYPER Boot Sanitize Environment", "version": BOOT_ENVIRONMENT_VERSION,
@@ -36,7 +37,10 @@ def write_manifest(output_dir: Path, *, kernel: Path, initramfs: Path, bootable:
 		"initramfs_filename": initramfs.name, "kernel_sha256": sha256_file(kernel),
 		"initramfs_sha256": sha256_file(initramfs), "bootable": bootable,
 		"build_kind": build_kind, "secure_boot_compatible": secure_boot_compatible,
+		"kernel_version": kernel_version,
 		"required_components": list(REQUIRED_IMAGE_MARKERS),
+		"included_components": list(included_components or []),
+		"validated_with_lsinitramfs": bool(bootable and included_components is not None),
 		"execution_mode": "boot_sanitize",
 		"built_at": datetime.fromtimestamp(build_epoch, timezone.utc).isoformat().replace("+00:00", "Z"),
 		"contains_agent_credentials": False, "contains_operator_secrets": False,
@@ -78,7 +82,8 @@ def build_host_boot_image(output_dir: str | Path, *, kernel_version: str | None 
 	if missing:
 		raise RuntimeError(f"Generated initramfs is missing required components: {', '.join(missing)}")
 	return write_manifest(output, kernel=kernel, initramfs=initramfs, bootable=True,
-		secure_boot_compatible=_secure_boot_compatible(kernel), build_kind="ubuntu-debian-initramfs-tools")
+		secure_boot_compatible=_secure_boot_compatible(kernel), build_kind="ubuntu-debian-initramfs-tools",
+		kernel_version=version, included_components=[line.strip() for line in listing.stdout.splitlines() if line.strip()])
 
 
 def build_fixture_boot_image(output_dir: str | Path) -> Path:

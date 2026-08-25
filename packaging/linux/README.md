@@ -1,4 +1,4 @@
-# VYPER Local Console 0.8.0-rc1
+# VYPER Local Console 1.0.0-rc1
 
 Ubuntu/Debian x86_64 prototype package.
 

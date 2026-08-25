@@ -436,13 +436,13 @@ test("local approval request sends only explicit approval and transient ATA pass
 test("download metadata is loaded from the central release endpoint", async () => {
   let requestedUrl;
   const fixture = [{
-    version: "0.8.0-rc1",
+    version: "1.0.0-rc1",
     platform: "linux",
     architecture: "x86_64",
-    filename: "vyper-local-console-linux-x86_64.tar.gz",
+    filename: "vyper-local-console-linux-x86_64-1.0.0-rc1.tar.gz",
     sha256: "a".repeat(64),
     size_bytes: 1234,
-    download_url: "/downloads/vyper-local-console-linux-x86_64.tar.gz",
+    download_url: "/downloads/vyper-local-console-linux-x86_64-1.0.0-rc1.tar.gz",
   }];
   const client = createApiClient({
     baseUrl: "https://central.example",

@@ -1,0 +1,1 @@
+{"fixture":true,"evidence_schema_version":"1","job_id":"demo-hdd-job","profile":{"serial_number":"DEMO-HDD-001"},"policy":{"method":"HDD_OVERWRITE"},"execution":{"raw_status":"RUNNING"},"verification":{"status":"VERIFIED"},"final_status":"VERIFIED","integrity_algorithm":"sha256","integrity_hash":"demo-fixture-not-production"}

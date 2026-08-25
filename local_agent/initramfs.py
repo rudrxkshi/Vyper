@@ -5,6 +5,7 @@ import io
 import os
 import stat
 from pathlib import Path
+from pathlib import PurePosixPath
 
 
 def _pad(stream: io.BytesIO, boundary: int = 4) -> None:
@@ -13,10 +14,11 @@ def _pad(stream: io.BytesIO, boundary: int = 4) -> None:
 		stream.write(b"\0" * remaining)
 
 
-def _newc_entry(stream: io.BytesIO, name: str, data: bytes, mode: int, inode: int) -> None:
+def _newc_entry(stream: io.BytesIO, name: str, data: bytes, mode: int, inode: int,
+	file_type: int = stat.S_IFREG) -> None:
 	encoded_name = name.lstrip("/").encode("utf-8") + b"\0"
 	header = "070701" + "".join(f"{value:08x}" for value in (
-		inode, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(encoded_name), 0,
+		inode, file_type | mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(encoded_name), 0,
 	))
 	stream.write(header.encode("ascii"))
 	stream.write(encoded_name)
@@ -27,9 +29,20 @@ def _newc_entry(stream: io.BytesIO, name: str, data: bytes, mode: int, inode: in
 
 def build_newc(files: dict[str, tuple[bytes, int]]) -> bytes:
 	stream = io.BytesIO()
-	for inode, (name, (data, mode)) in enumerate(sorted(files.items()), start=1):
-		_newc_entry(stream, name, data, stat.S_IFREG | mode, inode)
-	_newc_entry(stream, "TRAILER!!!", b"", 0, len(files) + 1)
+	directories: set[str] = set()
+	for name in files:
+		parent = PurePosixPath(name).parent
+		while str(parent) != ".":
+			directories.add(parent.as_posix())
+			parent = parent.parent
+	inode = 1
+	for name in sorted(directories, key=lambda item: (item.count("/"), item)):
+		_newc_entry(stream, name, b"", 0o755, inode, stat.S_IFDIR)
+		inode += 1
+	for name, (data, mode) in sorted(files.items()):
+		_newc_entry(stream, name, data, mode, inode)
+		inode += 1
+	_newc_entry(stream, "TRAILER!!!", b"", 0, inode)
 	return stream.getvalue()
 
 

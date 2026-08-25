@@ -1,4 +1,10 @@
-# Vyper
+# VYPER
+
+VYPER profiles storage, selects a device-appropriate sanitization pathway, verifies the outcome, and produces integrity-protected evidence and certificates. It combines a downloadable Linux local console with an optional central dashboard. VYPER 1.0.0-rc1 is ready for demonstrations and controlled VM or disposable-hardware testing; it is not universally production-ready.
+
+## Architecture
+
+The browser talks to an unprivileged local API or the central FastAPI service. Local storage access crosses a typed, allowlisted Unix-socket boundary into the root executor. Remote agents initiate outbound authenticated synchronization, so the central service never directly opens or controls local disks through NAT.
 
 ## Central backend
 
@@ -99,7 +105,7 @@ does not open an inbound control channel to the local machine.
 
 ## Linux Local Console package
 
-The release build produces `release/vyper-local-console-linux-x86_64.tar.gz` for
+The release build produces `release/vyper-local-console-linux-x86_64-1.0.0-rc1.tar.gz` for
 Ubuntu/Debian x86_64. It contains the Python wheel, pinned runtime dependency
 lock, static Next.js export, systemd units, installer, conservative uninstaller,
 payload checksums, and package manifest.
@@ -111,7 +117,7 @@ sudo vyper enroll
 vyper open
 ```
 
-The privileged agent starts automatically and binds to `127.0.0.1:8765`. The
+The unprivileged local agent starts automatically and binds to `127.0.0.1:8765`; only the allowlisted executor helper retains root storage access. The
 unprivileged static console binds to `127.0.0.1:8787`. Configuration lives in
 `/etc/vyper`, durable databases/outbox in `/var/lib/vyper`, and immutable
 application files in `/opt/vyper`. See `docs/INSTALL_LINUX.md` and
@@ -133,9 +139,43 @@ sudo vyper system-disk reboot --confirm-reboot
 See `docs/SYSTEM_DISK_SANITIZATION.md`, `docs/BOOT_RECOVERY.md`, and
 `docs/SECURE_BOOT.md` for safety checks and platform limitations.
 
+## Supported storage and method selection
+
+- Rotational HDD: `HDD_OVERWRITE` with measured completion and logical read sampling.
+- SATA SSD: `ATA_ERASE` only when ATA Secure Erase is supported and the device is not frozen. SATA crypto erase is unsupported and never substituted.
+- NVMe SSD: controller-native Crypto Erase, Block Erase, or Overwrite only when SANICAP and namespace/controller scope support the selected method.
+
+Mounted, system, holder-backed, RAID/LVM/multipath, identity-ambiguous, capability-unknown, or otherwise unsafe targets are conservatively refused.
+
+## Verification and reporting
+
+Verification is pathway-specific. Reports distinguish raw historical execution state, orchestration terminal state, verification state, final sanitization state, and boot-environment shutdown state. Only a verified result with valid evidence and certificate integrity can produce a successful sanitization certificate.
+
+## Development and testing
+
+Install the pinned Python and frontend dependencies, then run `python -m pytest tests`, `npm test`, `npm run lint`, and `npm run build` from the dashboard directory. All automated sanitization tests use mocks, fixtures, dry-run paths, or disposable VM evidence. Production central deployments require PostgreSQL at the supported Alembic head; development may use SQLite.
+
 ## Release-candidate status
 
-The current version is `0.8.0-rc1`: ready for a controlled demo and disposable
+The current version is `1.0.0-rc1`: ready for a controlled demo and disposable
 hardware validation, but not production-ready. See
 `docs/RELEASE_CANDIDATE_REPORT.md`, `docs/HARDWARE_VALIDATION_MATRIX.md`, and
 `docs/KNOWN_LIMITATIONS.md` for the evidence boundary and remaining gaps.
+
+The operator-gated physical HDD harness is documented in
+`docs/PHYSICAL_HDD_VALIDATION.md`. It is read-only unless `--execute` and an
+exact identity-derived confirmation are both supplied, and it uses the normal
+durable local-agent pathway rather than a direct disk command.
+
+Physical HDD, SATA SSD, and NVMe validation remains pending. Real Secure Boot validation and locally executed PostgreSQL/container production drills are also pending. See [release notes](RELEASE_NOTES.md), [compatibility](docs/COMPATIBILITY_MATRIX.md), [final security gate](docs/FINAL_SECURITY_GATE.md), and [validation report](docs/1.0.0-rc1-VALIDATION_REPORT.md).
+
+Controlled disposable SATA SSD validation through the existing controller-native
+`ATA_ERASE` pathway is documented in `docs/PHYSICAL_SATA_SSD_VALIDATION.md`.
+It refuses frozen drives and unproven USB-to-SATA pass-through, keeps progress
+indeterminate, and never substitutes HDD overwrite.
+
+Controlled disposable NVMe planning and validation evidence are documented in
+`docs/PHYSICAL_NVME_VALIDATION.md`. The harness is plan-only by default and uses
+the normal durable local API path. It preserves namespace asset identity while
+issuing controller-scoped sanitize and verification, and refuses controllers
+with multiple or incompletely checked namespaces.

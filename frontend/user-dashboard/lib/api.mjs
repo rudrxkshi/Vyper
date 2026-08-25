@@ -119,12 +119,16 @@ export function createApiClient({
   fetchImpl = globalThis.fetch,
 }) {
   const normalizedBaseUrl = normalizeApiBaseUrl(baseUrl);
+  let csrfToken = "";
 
   async function request(path, options = {}) {
     const headers = new Headers(options.headers || {});
     if (apiKey) headers.set("X-VYPER-API-Key", apiKey);
     if (options.body && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
+    }
+    if (csrfToken && ["POST", "PUT", "PATCH", "DELETE"].includes(String(options.method || "GET").toUpperCase())) {
+      headers.set("X-CSRF-Token", csrfToken);
     }
 
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
@@ -145,6 +149,7 @@ export function createApiClient({
       const detail = body && typeof body === "object" ? body.detail : body;
       throw new ApiError(describeDetail(detail), response.status, detail);
     }
+    if (body?.csrf_token) csrfToken = body.csrf_token;
     return body;
   }
 
@@ -158,6 +163,9 @@ export function createApiClient({
       body: JSON.stringify({ username, password }),
     }),
     logout: () => request("/auth/logout", { method: "POST" }),
+    enrollMfa: (password) => request("/auth/mfa/enroll", { method: "POST", body: JSON.stringify({ password }) }),
+    confirmMfa: (code) => request("/auth/mfa/confirm", { method: "POST", body: JSON.stringify({ code }) }),
+    verifyMfa: (code) => request("/auth/mfa/verify", { method: "POST", body: JSON.stringify({ code }) }),
     currentUser: () => request("/auth/me"),
     listAssets: () => request("/assets"),
     listDevices: () => request("/devices"),

@@ -9,6 +9,7 @@ from typing import Any
 from agent.agent import VYPERAgent
 
 from .jobs import LocalJobWorker, log_job
+from .privileged_executor import PrivilegedExecutorClient
 from .storage import ACTIVE_STATES, LocalJobStore
 
 
@@ -17,7 +18,9 @@ def _run_native_job(database_path: str, local_job_id: str, target: str, authoriz
 	"""Fixed child entry point. No command strings or shell input cross this boundary."""
 	store = LocalJobStore(database_path)
 	effective_dry_run = bool(dry_run) or bool(force_executor_dry_run)
-	agent = VYPERAgent(dry_run=effective_dry_run)
+	socket_path = os.getenv("VYPER_EXECUTOR_SOCKET")
+	agent = (PrivilegedExecutorClient(socket_path, execution_mode=os.getenv("VYPER_EXECUTION_MODE", "normal_local"))
+		if socket_path else VYPERAgent(dry_run=effective_dry_run))
 	LocalJobWorker(store=store, agent=agent).run(local_job_id, target, authorization, effective_dry_run)
 
 

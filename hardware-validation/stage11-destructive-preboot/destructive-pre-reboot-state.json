@@ -1,0 +1,34 @@
+{
+  "integrity": {
+    "algorithm": "HMAC-SHA256",
+    "key_id": "local-boot-job-v1",
+    "mac": "bfe998e908f9c81f99e220c0c1f8cf72ef439eee9ff71790760467b78f117b65"
+  },
+  "state": {
+    "events": [
+      {
+        "state": "PREPARING_BOOT",
+        "timestamp": "2026-08-25T15:11:11.576931Z"
+      },
+      {
+        "state": "AWAITING_REBOOT",
+        "timestamp": "2026-08-25T15:11:15.129613Z"
+      }
+    ],
+    "execution_attempted": false,
+    "handoff": {
+      "applied": true,
+      "configuration": "#!/bin/sh\nexec tail -n +3 $0\nmenuentry 'VYPER Boot Sanitize' --id vyper-boot-sanitize {\n    linux /boot/vyper/jobs/4edb1d85-ba87-4ee2-90d6-48808f00eaa6/vmlinuz vyper.mode=boot_sanitize vyper.boot_job=4edb1d85-ba87-4ee2-90d6-48808f00eaa6 noresume rd.shell=0\n    initrd /boot/vyper/jobs/4edb1d85-ba87-4ee2-90d6-48808f00eaa6/initramfs.img\n}\n",
+      "current_default_entry": null,
+      "entry_name": "VYPER Boot Sanitize",
+      "mechanism": "grub2-one-shot",
+      "next_entry": "VYPER Boot Sanitize",
+      "normal_default_unchanged": true,
+      "secure_boot_state": "UNKNOWN"
+    },
+    "prepared_initramfs": "/boot/vyper/jobs/4edb1d85-ba87-4ee2-90d6-48808f00eaa6/initramfs.img",
+    "prepared_kernel": "/boot/vyper/jobs/4edb1d85-ba87-4ee2-90d6-48808f00eaa6/vmlinuz",
+    "status": "AWAITING_REBOOT",
+    "updated_at": "2026-08-25T15:11:15.129613Z"
+  }
+}

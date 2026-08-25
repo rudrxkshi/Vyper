@@ -14,10 +14,29 @@ copy_exec /usr/bin/findmnt
 copy_exec /usr/sbin/swapon
 copy_exec /usr/sbin/pvs
 copy_exec /usr/bin/ip
+copy_exec /usr/bin/systemd-detect-virt
 [ -x /sbin/poweroff ] && copy_exec /sbin/poweroff
+[ -x /usr/bin/systemctl ] && copy_exec /usr/bin/systemctl
+[ -x /sbin/shutdown ] && copy_exec /sbin/shutdown
+[ -x /sbin/reboot ] && copy_exec /sbin/reboot
+[ -x /bin/busybox ] && copy_exec /bin/busybox
 [ -x /sbin/dhclient ] && copy_exec /sbin/dhclient
 
+# A venv contains symlinks to the host interpreter and uses the host standard
+# library. Copy both, plus dependencies of native Python extension modules,
+# before copying the venv itself.
+python_bin=$(readlink -f /opt/vyper/runtime/bin/python)
+copy_exec /usr/bin/python3
+copy_exec "$python_bin"
+python_stdlib=$($python_bin -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')
+for extension in $(find "$python_stdlib" /opt/vyper/runtime -type f -name '*.so'); do
+	copy_exec "$extension"
+done
+mkdir -p "$DESTDIR$(dirname "$python_stdlib")"
+cp -a "$python_stdlib" "$DESTDIR$(dirname "$python_stdlib")/"
+
 mkdir -p "$DESTDIR/opt/vyper"
-cp -a /opt/vyper/runtime "$DESTDIR/opt/vyper/runtime"
+mkdir -p "$DESTDIR/opt/vyper/runtime"
+cp -a /opt/vyper/runtime/. "$DESTDIR/opt/vyper/runtime/"
 mkdir -p "$DESTDIR/etc/ssl"
 cp -a /etc/ssl/certs "$DESTDIR/etc/ssl/certs"

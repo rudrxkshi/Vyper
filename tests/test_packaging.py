@@ -25,7 +25,7 @@ from vyper_version import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / "release"
-ARTIFACT = RELEASE / "vyper-local-console-linux-x86_64.tar.gz"
+ARTIFACT = RELEASE / f"vyper-local-console-linux-x86_64-{__version__}.tar.gz"
 
 
 def _load_installer():
@@ -35,18 +35,18 @@ def _load_installer():
 	return module
 
 
-def _package_fixture(tmp_path: Path) -> Path:
-	package = tmp_path / "package"
+def _package_fixture(tmp_path: Path, version: str = "1.0.0-rc1", name: str = "package") -> Path:
+	package = tmp_path / name
 	(package / "payload" / "ui").mkdir(parents=True)
 	(package / "payload" / "systemd").mkdir()
 	shutil.copytree(ROOT / "packaging" / "boot", package / "payload" / "boot")
 	shutil.copytree(ROOT / "docs", package / "payload" / "docs")
-	(package / "manifest.json").write_text('{"version":"0.5.0"}', encoding="utf-8")
-	(package / "payload" / "VERSION").write_text("0.5.0\n", encoding="utf-8")
+	(package / "manifest.json").write_text(json.dumps({"version": version}), encoding="utf-8")
+	(package / "payload" / "VERSION").write_text(version + "\n", encoding="utf-8")
 	(package / "payload" / "ui" / "index.html").write_text("VYPER", encoding="utf-8")
 	for filename in ("config.toml",):
 		(package / "payload" / filename).write_bytes((ROOT / "packaging" / "linux" / filename).read_bytes())
-	for filename in ("vyper-agent.service", "vyper-console.service"):
+	for filename in ("vyper-executor.service", "vyper-agent.service", "vyper-console.service"):
 		(package / "payload" / "systemd" / filename).write_bytes((ROOT / "packaging" / "linux" / "systemd" / filename).read_bytes())
 	return package
 
@@ -63,6 +63,22 @@ def test_release_checksum_and_size_match_actual_artifact():
 	assert manifest["sha256"] == digest
 	assert manifest["size_bytes"] == ARTIFACT.stat().st_size
 	assert (RELEASE / "checksums.txt").read_text(encoding="utf-8").startswith(digest)
+
+
+def test_initramfs_hook_copies_real_python_runtime_and_native_dependencies():
+	hook = (ROOT / "packaging/boot/initramfs-tools/hooks/vyper").read_text(encoding="utf-8")
+	assert 'readlink -f /opt/vyper/runtime/bin/python' in hook
+	assert 'copy_exec /usr/bin/python3' in hook
+	assert 'copy_exec /usr/bin/systemd-detect-virt' in hook
+	assert '[ -x /sbin/poweroff ] && copy_exec /sbin/poweroff' in hook
+	assert '[ -x /sbin/shutdown ] && copy_exec /sbin/shutdown' in hook
+	assert '[ -x /sbin/reboot ] && copy_exec /sbin/reboot' in hook
+	assert '[ -x /bin/busybox ] && copy_exec /bin/busybox' in hook
+	assert 'sysconfig.get_path("stdlib")' in hook
+	assert "find \"$python_stdlib\" /opt/vyper/runtime -type f -name '*.so'" in hook
+	assert 'copy_exec "$extension"' in hook
+	assert 'cp -a "$python_stdlib"' in hook
+	assert 'cp -a /opt/vyper/runtime/. "$DESTDIR/opt/vyper/runtime/"' in hook
 
 
 def test_installer_creates_layout_and_secure_permissions(tmp_path):
@@ -112,7 +128,8 @@ def test_fresh_install_fixture_initializes_runtime_state_and_all_cli_wrappers(tm
 
 def test_upgrade_preserves_jobs_outbox_correlation_evidence_and_operator_state(tmp_path):
 	installer = _load_installer()
-	package = _package_fixture(tmp_path)
+	package = _package_fixture(tmp_path, "0.8.0-rc1", "old-package")
+	current_package = _package_fixture(tmp_path, __version__, "current-package")
 	rootfs = tmp_path / "upgrade-rootfs"
 	installer.install_layout(package, rootfs, test_mode=True)
 	state_dir = rootfs / "var/lib/vyper"
@@ -133,13 +150,14 @@ def test_upgrade_preserves_jobs_outbox_correlation_evidence_and_operator_state(t
 	(rootfs / "etc/vyper/agent-identity.json").write_text("preserved-credential", encoding="utf-8")
 	(state_dir / "evidence").mkdir()
 	(state_dir / "evidence/result.json").write_text('{"preserved":true}', encoding="utf-8")
-	installer.install_layout(package, rootfs, test_mode=True)
+	installer.install_layout(current_package, rootfs, test_mode=True)
 	restarted = LocalJobStore(state_dir / "local-jobs.db")
 	assert restarted.get_job("local-preserved")["evidence"] == {"fixture": True}
 	assert restarted.get_remote_request("central-preserved")["local_job_id"] == "local-preserved"
 	assert restarted.outbox_summary()["pending"] == 1
 	assert (rootfs / "etc/vyper/agent-identity.json").read_text(encoding="utf-8") == "preserved-credential"
 	assert (state_dir / "evidence/result.json").read_text(encoding="utf-8") == '{"preserved":true}'
+	assert (rootfs / "opt/vyper/VERSION").read_text(encoding="utf-8").strip() == __version__
 
 
 def test_uninstall_preserves_state_unless_purge_is_explicit(tmp_path):
@@ -183,7 +201,9 @@ def test_systemd_units_enforce_loopback_unprivileged_ui_and_no_shell_service():
 	config = (ROOT / "packaging/linux/config.toml").read_text(encoding="utf-8")
 	assert 'local_agent_bind = "127.0.0.1"' in config
 	assert 'local_console_bind = "127.0.0.1"' in config
-	assert "User=root" in agent
+	executor = (ROOT / "packaging/linux/systemd/vyper-executor.service").read_text(encoding="utf-8")
+	assert "User=vyper-agent" in agent and "VYPER_EXECUTOR_SOCKET" in agent
+	assert "User=root" in executor and "RestrictAddressFamilies=AF_UNIX" in executor
 	assert "User=vyper-ui" in console and "User=root" not in console
 	assert "/bin/sh" not in agent and "/bin/bash" not in agent
 	assert "vyper-local-agent" in agent and "NoNewPrivileges=yes" in agent

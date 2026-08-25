@@ -33,6 +33,7 @@ services:
       VYPER_ENV: production
       VYPER_DATABASE_URL_FILE: /run/secrets/central_database_url
       VYPER_CORS_ORIGINS: ${VYPER_CORS_ORIGINS:-}
+      VYPER_METRICS_MODE: single-worker
     depends_on:
       migrate: {condition: service_completed_successfully}
     secrets: [central_database_url]

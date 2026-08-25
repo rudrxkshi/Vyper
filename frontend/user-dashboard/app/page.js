@@ -18,6 +18,7 @@ import {
   saveApiSettings,
   saveLocalJobId,
 } from "../lib/api.mjs";
+
 import {
   JOB_STATE_META,
   auditLogView,
@@ -37,6 +38,7 @@ import {
   shouldPollLocalJob,
 } from "../lib/presentation.mjs";
 
+const PRODUCT_VERSION = "1.0.0-rc1";
 const STAGES = ["Profiling", "Policy", "Execution", "Verification", "Evidence", "Certificate"];
 const TERMINAL_JOB_STATES = new Set(["VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"]);
 
@@ -1285,6 +1287,7 @@ export default function VyperDashboard() {
               <div className="nb-crumbs">Settings</div>
               <h1 className="nb-h1 nb-heading">Settings</h1>
               <p className="nb-sub">{localMode ? "Local mode connects directly to the execution service on this machine." : "Central mode connects to the persisted management API."}</p>
+			  <p className="nb-mono">VYPER {PRODUCT_VERSION}</p>
               <div className="nb-card" style={{ maxWidth: 460 }}>
                 <div className="nb-field">
                   <label>{localMode ? "NEXT_PUBLIC_VYPER_LOCAL_AGENT_API_BASE_URL" : "NEXT_PUBLIC_VYPER_API_BASE_URL"}</label>

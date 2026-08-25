@@ -36,14 +36,20 @@ state="$INSTALL_ROOT/var/lib/vyper"
 logs="$INSTALL_ROOT/var/log/vyper"
 
 if [ "$TEST_MODE" != "1" ]; then
-  if ! id vyper-ui >/dev/null 2>&1; then
+	if ! getent group vyper-executor >/dev/null 2>&1; then groupadd --system vyper-executor; fi
+	if ! id vyper-agent >/dev/null 2>&1; then
+		useradd --system --gid vyper-executor --home-dir /nonexistent --shell /usr/sbin/nologin vyper-agent
+	fi
+	if ! id vyper-ui >/dev/null 2>&1; then
     useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin vyper-ui
   fi
-  chown root:vyper-ui "$etc" "$etc/config.toml"
+	usermod -a -G vyper-executor vyper-ui
+  chown root:vyper-executor "$etc" "$etc/config.toml"
   chmod 0750 "$etc"
   chmod 0640 "$etc/config.toml"
-  if [ -f "$etc/agent-identity.json" ]; then chown root:root "$etc/agent-identity.json"; chmod 0600 "$etc/agent-identity.json"; fi
-  chown -R root:root "$opt" "$state" "$logs"
+  if [ -f "$etc/agent-identity.json" ]; then chown vyper-agent:vyper-executor "$etc/agent-identity.json"; chmod 0600 "$etc/agent-identity.json"; fi
+	chown -R root:root "$opt"
+	chown -R vyper-agent:vyper-executor "$state" "$logs"
   python3 -m venv "$opt/runtime"
   "$opt/runtime/bin/pip" install --disable-pip-version-check -r "$SCRIPT_DIR/payload/requirements.lock"
   "$opt/runtime/bin/pip" install --disable-pip-version-check --no-deps "$SCRIPT_DIR"/payload/wheels/vyper_local_console-*.whl
@@ -52,7 +58,7 @@ fi
 
 if [ "$TEST_MODE" != "1" ]; then
   systemctl daemon-reload
-  systemctl enable --now vyper-agent.service vyper-console.service
+	systemctl enable --now vyper-executor.service vyper-agent.service vyper-console.service
 fi
 
 printf 'VYPER Local Console installed.\nNext: vyper enroll\nThen: vyper open\n'

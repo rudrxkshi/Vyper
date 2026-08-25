@@ -1,0 +1,1 @@
+{"fixture":true,"certificate_version":"1.0.0","certificate_id":"demo-certificate","job_id":"demo-hdd-job","final_status":"VERIFIED","successful_sanitization_claim":true,"evidence_integrity":{"algorithm":"sha256","hash":"demo-fixture-not-production"},"certificate_hash_algorithm":"sha256","certificate_hash":"demo-fixture-not-production"}

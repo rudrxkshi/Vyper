@@ -66,6 +66,7 @@ class GrubOneShotHandoff:
 	def prepare(self, *, boot_job_id: str, image: BootImage, kernel_boot_path: str = "/vyper/vmlinuz",
 		initramfs_boot_path: str = "/vyper/initramfs.img", apply: bool = True) -> dict[str, Any]:
 		secure_boot = self.secure_boot_state()
+		before = self.grub_environment()
 		if secure_boot == "ENABLED" and not image.secure_boot_compatible:
 			raise BootJobError("Secure Boot is enabled but the VYPER boot image is not signed by a trusted key.")
 		entry = self.render_entry(boot_job_id=boot_job_id, kernel_boot_path=kernel_boot_path,
@@ -78,7 +79,23 @@ class GrubOneShotHandoff:
 			self._required(["swapoff", "--all"])
 			self._required(["grub-reboot", GRUB_ENTRY_NAME])
 		return {"mechanism": "grub2-one-shot", "entry_name": GRUB_ENTRY_NAME, "secure_boot_state": secure_boot,
+			"current_default_entry": before.get("saved_entry"),
+			"next_entry": GRUB_ENTRY_NAME if apply else before.get("next_entry"),
 			"normal_default_unchanged": True, "configuration": entry, "applied": apply}
+
+	def grub_environment(self) -> dict[str, str]:
+		try:
+			result = self.command_executor.run(["grub-editenv", "-", "list"], timeout=10)
+		except (OSError, FileNotFoundError):
+			return {}
+		if not result.success or result.exit_code != 0:
+			return {}
+		values: dict[str, str] = {}
+		for line in result.stdout.splitlines():
+			if "=" in line:
+				key, value = line.split("=", 1)
+				values[key.strip()] = value.strip()
+		return values
 
 	def cancel(self, *, apply: bool = True) -> None:
 		if apply:

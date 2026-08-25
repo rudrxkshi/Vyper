@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -18,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 from vyper_version import __version__
 
 
-ARTIFACT_NAME = "vyper-local-console-linux-x86_64.tar.gz"
+ARTIFACT_NAME = f"vyper-local-console-linux-x86_64-{__version__}.tar.gz"
 PRODUCT = "VYPER Local Console"
 
 
@@ -70,6 +71,9 @@ def _write_deterministic_tar(source: Path, destination: Path) -> None:
 
 def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_build: bool = False) -> Path:
 	output_dir.mkdir(parents=True, exist_ok=True)
+	from local_agent.sbom import generate_sbom
+	sbom = output_dir / "sbom.cdx.json"
+	generate_sbom(sbom, root=ROOT)
 	frontend = ROOT / "frontend" / "user-dashboard"
 	if not skip_builds and not skip_frontend_build:
 		environment = os.environ.copy()
@@ -110,14 +114,18 @@ def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_
 		package_root = temp / f"vyper-local-console-{__version__}"
 		payload = package_root / "payload"
 		(payload / "wheels").mkdir(parents=True)
+		(payload / "trust").mkdir(parents=True)
 		for filename in ("install.sh", "uninstall.sh", "README.md"):
 			shutil.copy2(ROOT / "packaging" / "linux" / filename, package_root / filename)
 		shutil.copy2(ROOT / "packaging" / "linux" / "config.toml", payload / "config.toml")
 		shutil.copy2(ROOT / "packaging" / "linux" / "installer.py", payload / "installer.py")
 		shutil.copy2(ROOT / "requirements.lock", payload / "requirements.lock")
+		shutil.copy2(ROOT / "deploy/trusted-release-keys.json", payload / "trust/trusted-release-keys.json")
 		_copy_tree(ROOT / "packaging" / "linux" / "systemd", payload / "systemd")
 		_copy_tree(ROOT / "packaging" / "boot", payload / "boot")
 		_copy_tree(ROOT / "docs", payload / "docs")
+		_copy_tree(ROOT / "demo-fixtures", payload / "demo-fixtures")
+		shutil.copy2(sbom, payload / "sbom.cdx.json")
 		_copy_tree(frontend / "out", payload / "ui")
 		_copy_tree(wheel_dir, payload / "wheels")
 		(payload / "VERSION").write_text(__version__ + "\n", encoding="utf-8")
@@ -162,9 +170,12 @@ def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_
 		"download_url": f"/downloads/{artifact.name}",
 		"minimum_agent_protocol": "1",
 		"minimum_local_api_version": "2",
-		"signature_status": "checksum-only",
+		"signature_status": "UNSIGNED",
+		"integrity_status": "CHECKSUM_ONLY",
 		"signature_type": None,
 		"signature_file": None,
+		"signature_key_id": None,
+		"sbom": {"filename": sbom.name, "format": "CycloneDX", "spec_version": "1.6", "sha256": sha256_file(sbom)},
 	}
 	(output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 	(output_dir / "checksums.txt").write_text(f"{archive_hash}  {artifact.name}\n", encoding="utf-8")

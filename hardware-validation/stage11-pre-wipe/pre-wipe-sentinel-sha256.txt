@@ -1,0 +1,2 @@
+43eb0ca1aec5a29fa8325b6d44d20232377414f7afd8e78338f6458e96f7176a  /root/vyper-destruction-validation/sentinel.txt
+16ce8922211cad7d502e9cea991a53faa364497e7c728bd7c9f5c0ff343ca3a5  /root/vyper-destruction-validation/sample.bin

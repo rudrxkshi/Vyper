@@ -129,6 +129,9 @@ class UserRecord(Base):
 	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 	updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
 	password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+	mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+	mfa_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+	mfa_recovery_codes_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
 
 
 class OperatorSessionRecord(Base):
@@ -141,6 +144,9 @@ class OperatorSessionRecord(Base):
 	expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 	last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 	revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+	absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+	mfa_assurance: Mapped[str] = mapped_column(String(32), nullable=False, default="PASSWORD")
+	csrf_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class LoginAttemptRecord(Base):

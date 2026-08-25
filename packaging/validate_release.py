@@ -18,6 +18,7 @@ FORBIDDEN_SUFFIXES = (".pyc", ".db", ".env", ".env.local", ".map")
 REQUIRED_SUFFIXES = (
 	"/install.sh", "/uninstall.sh", "/manifest.json", "/checksums.txt",
 	"/payload/config.toml", "/payload/systemd/vyper-agent.service",
+	"/payload/systemd/vyper-executor.service", "/payload/trust/trusted-release-keys.json", "/payload/sbom.cdx.json",
 	"/payload/systemd/vyper-console.service", "/payload/boot/build_boot_image.py",
 	"/payload/boot/initramfs-tools/hooks/vyper",
 	"/payload/boot/initramfs-tools/scripts/local-premount/vyper",
@@ -35,6 +36,9 @@ def validate_release(release_directory: str | Path) -> dict[str, object]:
 		raise ValueError("Release manifest version does not match runtime version.")
 	if digest != manifest.get("sha256") or artifact.stat().st_size != manifest.get("size_bytes"):
 		raise ValueError("Release archive checksum or size does not match its manifest.")
+	sbom = release / str((manifest.get("sbom") or {}).get("filename") or "")
+	if not sbom.is_file() or hashlib.sha256(sbom.read_bytes()).hexdigest() != (manifest.get("sbom") or {}).get("sha256"):
+		raise ValueError("Release SBOM is missing or does not match its manifest reference.")
 	with tarfile.open(artifact, "r:gz") as archive:
 		members = archive.getmembers()
 		names = [member.name for member in members]

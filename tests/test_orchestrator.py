@@ -129,18 +129,28 @@ def test_successful_hdd_workflow():
 
 def test_successful_nvme_crypto_workflow():
     calls = []
-    profile = _profile("NVMe")
+    profile = _profile("NVMe", device_path="/dev/nvme0n1")
     profiler = StubProfiler(profile_result=profile)
     policy = StubPolicyEngine(decision=_decision("CRYPTO_ERASE", "NVMe"))
     verifier = StubVerifier(result=_verification(SanitizationStatus.VERIFIED, True))
-    agent = VYPERAgent(profiler=profiler, policy_engine=policy, verifier=verifier)
+    scope = {
+        "scope_proven": True, "execution_eligible": True,
+        "requested_namespace": "/dev/nvme0n1", "resolved_controller": "/dev/nvme0",
+        "sanitize_target": "/dev/nvme0", "sanitize_scope": "controller",
+        "controller_namespaces": ["/dev/nvme0n1"], "execution_blockers": [],
+        "controller_sanicap": {"crypto_erase": True, "block_erase": True, "overwrite": True},
+    }
+    agent = VYPERAgent(profiler=profiler, policy_engine=policy, verifier=verifier,
+        nvme_scope_resolver=lambda _target: scope)
     agent._resolve_pathway = lambda pathway_name, dry_run: DummyPathway(_execution_result(SanitizationStatus.RUNNING, "NVME_SANITIZE"), calls)
 
-    result = agent.sanitize_device("/dev/sdx", authorization={"approved": True}, dry_run=False)
+    result = agent.sanitize_device("/dev/nvme0n1", authorization={"approved": True}, dry_run=False)
 
     assert result.job_state == JobState.VERIFIED
     assert calls[0][1]["selected_method"] == "CRYPTO_ERASE"
     assert calls[0][1]["profile"].capabilities == profile.capabilities
+    assert calls[0][1]["controller_scope"] == scope
+    assert result.evidence is not None and result.evidence.device == "/dev/nvme0n1"
 
 
 def test_nvme_crypto_resolves_to_nvme_sanitize_pathway():
@@ -227,7 +237,15 @@ def test_sata_crypto_erase_is_unsupported_without_pathway_execution(monkeypatch)
     profiler = StubProfiler(profile_result=_profile("SATA SSD"))
     policy = StubPolicyEngine(decision=_decision("CRYPTO_ERASE", "SATA SSD"))
     verifier = StubVerifier(result=_verification(SanitizationStatus.VERIFIED, True))
-    agent = VYPERAgent(profiler=profiler, policy_engine=policy, verifier=verifier)
+    scope = {
+        "scope_proven": True, "execution_eligible": True,
+        "requested_namespace": "/dev/nvme0n1", "resolved_controller": "/dev/nvme0",
+        "sanitize_target": "/dev/nvme0", "sanitize_scope": "controller",
+        "controller_namespaces": ["/dev/nvme0n1"], "execution_blockers": [],
+        "controller_sanicap": {"crypto_erase": True, "block_erase": True, "overwrite": True},
+    }
+    agent = VYPERAgent(profiler=profiler, policy_engine=policy, verifier=verifier,
+        nvme_scope_resolver=lambda _target: scope)
     agent._resolve_pathway = fail_route
 
     result = agent.sanitize_device(
@@ -261,7 +279,7 @@ def test_unsupported_device():
     verifier = StubVerifier(result=_verification(SanitizationStatus.INCONCLUSIVE, False))
     agent = VYPERAgent(profiler=profiler, policy_engine=policy, verifier=verifier)
 
-    result = agent.sanitize_device("/dev/sdx", authorization={"approved": True}, dry_run=False)
+    result = agent.sanitize_device("/dev/nvme0n1", authorization={"approved": True}, dry_run=False)
 
     assert result.job_state == JobState.UNSUPPORTED
     assert result.execution is not None and result.execution.status == SanitizationStatus.UNSUPPORTED

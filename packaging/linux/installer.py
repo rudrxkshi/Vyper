@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 
-COMMANDS = ("vyper", "vyper-agent", "vyper-local-agent", "vyper-console", "vyper-diagnose")
+COMMANDS = ("vyper", "vyper-agent", "vyper-local-agent", "vyper-console", "vyper-diagnose", "vyper-privileged-executor")
 
 
 def _under(root: Path, absolute: str) -> Path:
@@ -33,16 +33,19 @@ def install_layout(package_root: Path, root: Path, *, test_mode: bool = False) -
 	(opt / "runtime").mkdir(exist_ok=True)
 	(opt / "boot").mkdir(exist_ok=True)
 	(opt / "docs").mkdir(exist_ok=True)
+	(opt / "trust").mkdir(exist_ok=True)
 	shutil.copy2(package_root / "manifest.json", opt / "manifest.json")
 	shutil.copy2(package_root / "payload" / "VERSION", opt / "VERSION")
 	shutil.copytree(package_root / "payload" / "ui", opt / "ui", dirs_exist_ok=True)
 	shutil.copytree(package_root / "payload" / "docs", opt / "docs", dirs_exist_ok=True)
+	if (package_root / "payload" / "trust").is_dir():
+		shutil.copytree(package_root / "payload" / "trust", opt / "trust", dirs_exist_ok=True)
 	shutil.copy2(package_root / "payload" / "boot" / "build_boot_image.py", opt / "boot" / "build_boot_image.py")
 	shutil.copy2(package_root / "payload" / "boot" / "initramfs-tools" / "hooks" / "vyper", initramfs_hooks / "vyper")
 	shutil.copy2(package_root / "payload" / "boot" / "initramfs-tools" / "scripts" / "local-premount" / "vyper", initramfs_scripts / "vyper")
 	os.chmod(initramfs_hooks / "vyper", 0o755)
 	os.chmod(initramfs_scripts / "vyper", 0o755)
-	for unit in ("vyper-agent.service", "vyper-console.service"):
+	for unit in ("vyper-executor.service", "vyper-agent.service", "vyper-console.service"):
 		shutil.copy2(package_root / "payload" / "systemd" / unit, units / unit)
 		os.chmod(units / unit, 0o644)
 	config = config_dir / "config.toml"
@@ -65,7 +68,7 @@ def uninstall_layout(root: Path, *, purge: bool = False) -> None:
 	root = root.resolve()
 	for command in COMMANDS:
 		_under(root, f"/usr/bin/{command}").unlink(missing_ok=True)
-	for unit in ("vyper-agent.service", "vyper-console.service"):
+	for unit in ("vyper-executor.service", "vyper-agent.service", "vyper-console.service"):
 		_under(root, f"/etc/systemd/system/{unit}").unlink(missing_ok=True)
 	_under(root, "/etc/initramfs-tools/hooks/vyper").unlink(missing_ok=True)
 	_under(root, "/etc/initramfs-tools/scripts/local-premount/vyper").unlink(missing_ok=True)

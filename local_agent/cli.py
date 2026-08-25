@@ -33,6 +33,24 @@ def _system_disk_service():
 	)
 
 
+def _hardware_validation_harness(args):
+	from agent.command_runner import SubprocessCommandExecutor
+	from agent.profiler import DeviceProfiler
+	from .hardware_validation import HardwareValidationHarness, LocalValidationClient
+	settings = load_config()
+	executor = SubprocessCommandExecutor()
+	client = LocalValidationClient(
+		f"http://127.0.0.1:{settings.local_agent_port}",
+		api_key=os.getenv("VYPER_LOCAL_AGENT_API_KEY"),
+	)
+	return HardwareValidationHarness(
+		profiler=DeviceProfiler(command_executor=executor),
+		command_executor=executor,
+		local_client=client,
+		output_directory=args.output_dir,
+	)
+
+
 def _systemctl(action: str) -> int:
 	result = subprocess.run(["systemctl", action, "vyper-agent.service", "vyper-console.service"], check=False)
 	return int(result.returncode)
@@ -133,7 +151,7 @@ def diagnose(json_output: bool = False) -> int:
 	return 0
 
 
-def verify_package(artifact_value: str, manifest_value: str | None = None) -> int:
+def verify_package(artifact_value: str, manifest_value: str | None = None, trust_store_value: str | None = None) -> int:
 	artifact = Path(artifact_value).resolve()
 	manifest_path = Path(manifest_value).resolve() if manifest_value else artifact.with_name("manifest.json")
 	try:
@@ -150,11 +168,24 @@ def verify_package(artifact_value: str, manifest_value: str | None = None) -> in
 		print(json.dumps({"verified": False, "error": f"Artifact unavailable: {type(exc).__name__}"}))
 		return 2
 	checksum_ok = digest.hexdigest() == manifest.get("sha256") and artifact.name == manifest.get("filename")
-	signed = manifest.get("signature_status") == "signed" and bool(manifest.get("signature_type"))
-	report = {"verified": checksum_ok, "checksum_verified": checksum_ok, "signed": signed,
-		"signature_status": manifest.get("signature_status", "unknown"), "sha256": digest.hexdigest()}
+	signed = False; signature_verified = False; signature_result = "UNSIGNED / CHECKSUM_ONLY"
+	if str(manifest.get("signature_status", "")).upper() == "SIGNED":
+		try:
+			from .release_signing import signature_bytes, trusted_public_key, verify_detached
+			if manifest.get("signature_type") != "ed25519": raise ValueError("Unsupported signature type.")
+			trust_store = Path(trust_store_value or os.getenv("VYPER_RELEASE_TRUST_STORE", "/opt/vyper/trust/trusted-release-keys.json"))
+			public_pem = trusted_public_key(trust_store, str(manifest.get("signature_key_id") or ""))
+			signature = signature_bytes(artifact.with_name(str(manifest.get("signature_file") or "")))
+			verify_detached(artifact, signature, public_pem)
+			signed = signature_verified = True; signature_result = "VERIFIED"
+		except Exception as exc:
+			signature_result = f"REJECTED: {type(exc).__name__}"
+	report = {"verified": bool(checksum_ok and (signature_verified or str(manifest.get("signature_status", "")).upper() != "SIGNED")),
+		"checksum_verified": checksum_ok, "signed": signed, "signature_verified": signature_verified,
+		"signature_result": signature_result, "signature_status": manifest.get("signature_status", "unknown"),
+		"signature_key_id": manifest.get("signature_key_id"), "sha256": digest.hexdigest()}
 	print(json.dumps(report, sort_keys=True))
-	return 0 if checksum_ok else 1
+	return 0 if report["verified"] else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -172,6 +203,30 @@ def build_parser() -> argparse.ArgumentParser:
 	verify_parser = subparsers.add_parser("verify-package")
 	verify_parser.add_argument("artifact")
 	verify_parser.add_argument("--manifest")
+	verify_parser.add_argument("--trust-store")
+	validation = subparsers.add_parser("validate-hardware")
+	validation_classes = validation.add_subparsers(dest="validation_class", required=True)
+	hdd_validation = validation_classes.add_parser("hdd")
+	hdd_validation.add_argument("operation", nargs="?", choices=["prepare"], default="validate")
+	hdd_validation.add_argument("--device", required=True)
+	hdd_validation.add_argument("--execute", action="store_true")
+	hdd_validation.add_argument("--output-dir", default="hardware-validation")
+	hdd_validation.add_argument("--poll-seconds", type=float, default=1.0)
+	hdd_validation.add_argument("--timeout-seconds", type=float, default=172800.0)
+	sata_validation = validation_classes.add_parser("sata-ssd")
+	sata_validation.add_argument("operation", nargs="?", choices=["prepare"], default="validate")
+	sata_validation.add_argument("--device", required=True)
+	sata_validation.add_argument("--execute", action="store_true")
+	sata_validation.add_argument("--output-dir", default="hardware-validation")
+	sata_validation.add_argument("--poll-seconds", type=float, default=1.0)
+	sata_validation.add_argument("--timeout-seconds", type=float, default=172800.0)
+	nvme_validation = validation_classes.add_parser("nvme")
+	nvme_validation.add_argument("operation", nargs="?", choices=["prepare"], default="validate")
+	nvme_validation.add_argument("--device", required=True)
+	nvme_validation.add_argument("--execute", action="store_true")
+	nvme_validation.add_argument("--output-dir", default="hardware-validation")
+	nvme_validation.add_argument("--poll-seconds", type=float, default=1.0)
+	nvme_validation.add_argument("--timeout-seconds", type=float, default=172800.0)
 	system_disk = subparsers.add_parser("system-disk")
 	system_commands = system_disk.add_subparsers(dest="system_disk_command", required=True)
 	prepare_parser = system_commands.add_parser("prepare")
@@ -181,6 +236,8 @@ def build_parser() -> argparse.ArgumentParser:
 	prepare_parser.add_argument("--central-job-id")
 	prepare_parser.add_argument("--expires-in-seconds", type=int, default=3600)
 	prepare_parser.add_argument("--no-apply", action="store_true", help=argparse.SUPPRESS)
+	prepare_parser.add_argument("--vm-validation-manifest")
+	prepare_parser.add_argument("--allow-destructive-vm-test", action="store_true")
 	status_parser = system_commands.add_parser("status")
 	status_parser.add_argument("--boot-job-id")
 	cancel_parser = system_commands.add_parser("cancel")
@@ -189,6 +246,9 @@ def build_parser() -> argparse.ArgumentParser:
 	reboot_parser = system_commands.add_parser("reboot")
 	reboot_parser.add_argument("--confirm-reboot", action="store_true")
 	reboot_parser.add_argument("--no-apply", action="store_true", help=argparse.SUPPRESS)
+	system_commands.add_parser("boot-self-test")
+	secure_boot_parser = system_commands.add_parser("secure-boot-status")
+	secure_boot_parser.add_argument("--certificate")
 	return parser
 
 
@@ -209,9 +269,46 @@ def main(argv: list[str] | None = None) -> int:
 	if args.command == "enroll":
 		return enroll(args)
 	if args.command == "verify-package":
-		return verify_package(args.artifact, args.manifest)
+		return verify_package(args.artifact, args.manifest, args.trust_store)
+	if args.command == "validate-hardware":
+		from .hardware_validation import HardwareValidationError
+		try:
+			harness = _hardware_validation_harness(args)
+			if args.validation_class == "nvme" and args.operation == "prepare":
+				harness.prepare_nvme(args.device, execute=args.execute)
+			elif args.validation_class == "nvme":
+				harness.validate_nvme(args.device, execute=args.execute,
+					poll_seconds=args.poll_seconds, timeout_seconds=args.timeout_seconds)
+			elif args.validation_class == "sata-ssd" and args.operation == "prepare":
+				harness.prepare_sata_ssd(args.device, execute=args.execute)
+			elif args.validation_class == "sata-ssd":
+				harness.validate_sata_ssd(
+					args.device, execute=args.execute,
+					poll_seconds=args.poll_seconds, timeout_seconds=args.timeout_seconds,
+				)
+			elif args.operation == "prepare":
+				harness.prepare(args.device, execute=args.execute)
+			else:
+				harness.validate(
+					args.device, execute=args.execute,
+					poll_seconds=args.poll_seconds, timeout_seconds=args.timeout_seconds,
+				)
+			return 0
+		except HardwareValidationError as exc:
+			print(f"Hardware validation stopped safely: {exc}", file=sys.stderr)
+			return 2
 	if args.command == "system-disk":
 		try:
+			if args.system_disk_command == "secure-boot-status":
+				from .secure_boot import secure_boot_status
+				report = secure_boot_status(signing_certificate=args.certificate)
+				print(json.dumps(report, indent=2, sort_keys=True))
+				return 0 if report["status"] in {"SUPPORTED", "REQUIRES_KEY_ENROLLMENT"} else 1
+			if args.system_disk_command == "boot-self-test":
+				from .vm_validation import BootSelfTest
+				report = BootSelfTest().run()
+				print(json.dumps(report, indent=2, sort_keys=True))
+				return 0 if report["boot_self_test"] == "PASS" else 1
 			service = _system_disk_service()
 			if args.system_disk_command == "prepare":
 				if not args.dry_run and not args.authorize_system_disk:
@@ -226,11 +323,24 @@ def main(argv: list[str] | None = None) -> int:
 					agent_id = credential_payload.get("agent_id")
 				if args.central_job_id and (not agent_id or not settings.central_api_url):
 					raise RuntimeError("Remote boot jobs require an enrolled agent credential and configured central HTTPS URL.")
+				vm_validation = None
+				if args.vm_validation_manifest:
+					from .vm_validation import VirtualizationInspector, load_vm_validation_manifest
+					if os.getenv("VYPER_VM_VALIDATION") != "1":
+						raise RuntimeError("VM validation manifest requires VYPER_VM_VALIDATION=1.")
+					vm_validation = load_vm_validation_manifest(args.vm_validation_manifest)
+					host = VirtualizationInspector().inspect()
+					if host.get("virtualbox_proven") is not True:
+						raise RuntimeError("VirtualBox environment could not be proven.")
+					vm_validation["preparation_virtualization"] = host
+					vm_validation["allow_destructive_vm_test"] = bool(args.allow_destructive_vm_test)
+					if not args.dry_run and (not vm_validation["destructive_test_enabled"] or not args.allow_destructive_vm_test):
+						raise RuntimeError("Destructive VM preparation requires both manifest authorization and --allow-destructive-vm-test.")
 				prepared = service.prepare(dry_run=args.dry_run, requested_method=args.method,
 					central_job_id=args.central_job_id, agent_id=agent_id,
 					central_api_url=settings.central_api_url or None, agent_credential_path=credential_file,
 					expires_in_seconds=args.expires_in_seconds,
-					apply_handoff=not args.no_apply)
+					apply_handoff=not args.no_apply, vm_validation=vm_validation)
 				if args.central_job_id and credential_payload:
 					_report_prepared_boot_events(central_url=settings.central_api_url,
 						central_job_id=args.central_job_id, boot_job_id=prepared["boot_job"]["boot_job_id"],

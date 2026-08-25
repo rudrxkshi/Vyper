@@ -1,0 +1,26 @@
+{
+   "partitiontable": {
+      "label": "gpt",
+      "id": "77F98658-2E19-4838-833B-535BD63F28DB",
+      "device": "/dev/sda",
+      "unit": "sectors",
+      "firstlba": 2048,
+      "lastlba": 52428766,
+      "sectorsize": 512,
+      "partitions": [
+         {
+            "node": "/dev/sda1",
+            "start": 2048,
+            "size": 2048,
+            "type": "21686148-6449-6E6F-744E-656564454649",
+            "uuid": "6AC32264-4783-4BE8-A59B-A0D44D2E93E0"
+         },{
+            "node": "/dev/sda2",
+            "start": 4096,
+            "size": 52422656,
+            "type": "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+            "uuid": "8EFA5F2D-81E5-40B0-8F45-7BCD7F430277"
+         }
+      ]
+   }
+}

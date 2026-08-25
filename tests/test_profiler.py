@@ -167,9 +167,11 @@ def test_nvme_detection(tmp_sysfs):
     (dev / "device").mkdir()
     (dev / "device" / "model").write_text("NVMe SSD\n", encoding="utf-8")
     (dev / "device" / "serial").write_text("NVME123\n", encoding="utf-8")
+    (dev / "device" / "controller").write_text("nvme0\n", encoding="utf-8")
+    (tmp_sysfs / "class" / "nvme" / "nvme0").mkdir(parents=True)
     (dev / "size").write_text("8388608\n", encoding="utf-8")
     executor = DummyExecutor({
-        ("nvme", "id-ctrl", "-H", "/dev/nvme0n1"): {
+        ("nvme", "id-ctrl", "-H", "/dev/nvme0"): {
             "success": True,
             "stdout": "\nNVME Identify Controller:\n  SANICAP: 0x7\n",
             "exit_code": 0,
@@ -206,8 +208,11 @@ def test_missing_nvme_cli(tmp_sysfs):
     dev = tmp_sysfs / "class" / "block" / "nvme1n1"
     dev.mkdir(parents=True)
     (dev / "size").write_text("1024\n", encoding="utf-8")
+    (dev / "device").mkdir()
+    (dev / "device" / "controller").write_text("nvme1\n", encoding="utf-8")
+    (tmp_sysfs / "class" / "nvme" / "nvme1").mkdir(parents=True)
     executor = DummyExecutor({
-        ("nvme", "id-ctrl", "-H", "/dev/nvme1n1"): FileNotFoundError()
+        ("nvme", "id-ctrl", "-H", "/dev/nvme1"): FileNotFoundError()
     })
     profiler = DeviceProfiler(command_executor=executor, sysfs_root=str(tmp_sysfs), mountinfo_path=str(tmp_sysfs / "mountinfo"))
 
@@ -296,8 +301,11 @@ def test_malformed_command_output(tmp_sysfs):
     dev = tmp_sysfs / "class" / "block" / "nvme0n2"
     dev.mkdir(parents=True)
     (dev / "size").write_text("128\n", encoding="utf-8")
+    (dev / "device").mkdir()
+    (dev / "device" / "controller").write_text("nvme0\n", encoding="utf-8")
+    (tmp_sysfs / "class" / "nvme" / "nvme0").mkdir(parents=True)
     executor = DummyExecutor({
-        ("nvme", "id-ctrl", "-H", "/dev/nvme0n2"): {
+        ("nvme", "id-ctrl", "-H", "/dev/nvme0"): {
             "success": True,
             "stdout": "\nSANICAP: malformed\n",
             "exit_code": 0,

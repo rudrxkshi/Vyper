@@ -11,6 +11,7 @@ from vyper_version import __version__
 from agent.certificate import CertificateBuilder, SanitizationCertificate
 from agent.common import JobState, SanitizationResult, SanitizationStatus
 from agent.evidence import EvidenceCollector, EvidenceRecord
+from agent.nvme_scope import NVMeControllerResolver
 from agent.pathways.ata_erase import ATAErasePathway
 from agent.pathways.hdd_overwrite import HDDOverwritePathway
 from agent.pathways.nvme_sanitize import NVMeSanitizePathway
@@ -58,6 +59,7 @@ class VYPERAgent:
         verifier: Verifier | None = None,
         evidence_collector: EvidenceCollector | None = None,
         certificate_builder: CertificateBuilder | None = None,
+        nvme_scope_resolver: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self.dry_run = dry_run
         self.profiler = profiler or DeviceProfiler(dry_run=dry_run)
@@ -67,6 +69,12 @@ class VYPERAgent:
             dry_run=dry_run, agent_version=f"vyper-agent/{__version__}"
         )
         self.certificate_builder = certificate_builder or CertificateBuilder()
+        resolver = NVMeControllerResolver(
+            profiler=self.profiler,
+            command_executor=getattr(self.profiler, "command_executor", None),
+            sysfs_root=getattr(self.profiler, "sysfs_root", "/sys"),
+        )
+        self.nvme_scope_resolver = nvme_scope_resolver or resolver.resolve
 
     def sanitize_device(
         self,
@@ -556,6 +564,14 @@ class VYPERAgent:
         }
         if pathway_name in {"CRYPTO_ERASE", "BLOCK_ERASE", "NVME_OVERWRITE"}:
             kwargs["selected_method"] = pathway_name
+            try:
+                kwargs["controller_scope"] = self.nvme_scope_resolver(target)
+            except Exception as exc:
+                kwargs["controller_scope"] = {
+                    "scope_proven": False,
+                    "execution_eligible": False,
+                    "execution_blockers": [f"NVMe controller resolution failed safely: {type(exc).__name__}"],
+                }
         if pathway_name == "ATA_ERASE" and ata_password:
             kwargs["password"] = ata_password
         return pathway.execute(target, **kwargs)

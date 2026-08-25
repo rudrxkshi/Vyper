@@ -222,7 +222,13 @@ class DeviceProfiler:
 
     def _profile_nvme(self, profile: DeviceProfile, device_path: str, device_name: str) -> dict[str, Any]:
         capabilities: dict[str, Any] = {"type": "NVMe"}
-        nvme_cmd = ["nvme", "id-ctrl", "-H", device_path]
+        controller_path = self._nvme_controller_path(device_name)
+        if controller_path is None:
+            capabilities["nvme_cli_available"] = False
+            self._append_warning(profile, f"Owning NVMe controller for {device_path} could not be proven from sysfs; SANICAP was not queried.")
+            return capabilities
+        capabilities["controller_path"] = controller_path
+        nvme_cmd = ["nvme", "id-ctrl", "-H", controller_path]
         try:
             result = self.command_executor.run(nvme_cmd, timeout=10)
         except FileNotFoundError:
@@ -239,6 +245,26 @@ class DeviceProfiler:
         capabilities["nvme_cli_available"] = True
         capabilities["sanicap"] = self._parse_sanicap(profile, text)
         return capabilities
+
+    def _nvme_controller_path(self, device_name: str) -> str | None:
+        namespace_device = self.sysfs_root / "class" / "block" / device_name / "device"
+        try:
+            resolved = namespace_device.resolve(strict=True)
+        except OSError:
+            return None
+        controllers = sorted({part for part in resolved.parts if re.fullmatch(r"nvme\d+", part)})
+        if not controllers:
+            # Some synthetic/minimal sysfs views expose an explicit controller
+            # marker instead of the canonical symlink target. It is accepted
+            # only when the corresponding controller class entry also exists.
+            marker = self._read_file(namespace_device / "controller")
+            controllers = [marker] if marker and re.fullmatch(r"nvme\d+", marker) else []
+        if len(controllers) != 1:
+            return None
+        controller = controllers[0]
+        if not (self.sysfs_root / "class" / "nvme" / controller).exists():
+            return None
+        return f"/dev/{controller}"
 
     def _parse_sanicap(self, profile: DeviceProfile, output: str) -> dict[str, Any]:
         parsed = {

@@ -32,6 +32,13 @@ jobs:
         env: {VYPER_TEST_POSTGRES_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"}
       - run: pytest tests/test_stage7_boot_sanitize.py tests/test_stage8_release_candidate.py -p no:cacheprovider
       - run: pip-audit -r requirements.lock -r requirements-central.lock
+      - run: python scripts/postgres-validation.py
+        env: {VYPER_TEST_POSTGRES_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"}
+      - run: PGPASSWORD=ci-only-password psql -h 127.0.0.1 -U vyper_ci -d postgres -c 'CREATE DATABASE vyper_restore'
+      - run: python scripts/postgres-backup-restore.py --execute
+        env:
+          VYPER_TEST_POSTGRES_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"
+          VYPER_TEST_POSTGRES_RESTORE_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_restore"
   frontend:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: frontend/user-dashboard}}
@@ -57,10 +64,24 @@ jobs:
       - run: npm ci
         working-directory: frontend/user-dashboard
       - run: python packaging/build_release.py
+      - run: python packaging/generate_sbom.py
       - run: python packaging/boot/build_boot_image.py --fixture --output-dir release/boot
       - run: python packaging/validate_release.py
+      - run: python -m pip_audit -r requirements.lock -r requirements-central.lock
+      - run: npm audit --audit-level=high
+        working-directory: frontend/user-dashboard
+      - run: python -m pytest tests/test_stage13_security.py tests/test_stage14_release_freeze.py -p no:cacheprovider
       - run: pytest tests/test_packaging.py tests/test_stage7_boot_sanitize.py tests/test_stage8_release_candidate.py -p no:cacheprovider
       - run: git diff --check
+
+  containers:
+    runs-on: ubuntu-latest
+    needs: [python, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f docker-compose.production.yml config --quiet
+      - run: docker build -f Dockerfile.central -t vyper-central:ci .
+      - run: docker build -f frontend/user-dashboard/Dockerfile -t vyper-frontend:ci frontend/user-dashboard
       - uses: actions/upload-artifact@v4
         if: startsWith(github.ref, 'refs/tags/')
         with: {name: vyper-linux-release, path: release/}

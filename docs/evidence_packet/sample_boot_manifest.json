@@ -16,7 +16,7 @@
     "dry_run": true,
     "execution_mode": "boot_sanitize",
     "local_confirmation_state": "REQUIRED_IN_BOOT_ENVIRONMENT",
-    "boot_image_version": "0.8.0-rc1",
+    "boot_image_version": "1.0.0-rc1",
     "job_nonce": "illustrative-random-nonce"
   },
   "integrity": {

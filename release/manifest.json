@@ -1,16 +1,24 @@
 {
   "product": "VYPER Local Console",
-  "version": "0.8.0-rc1",
+  "version": "1.0.0-rc1",
   "platform": "linux",
   "architecture": "x86_64",
-  "filename": "vyper-local-console-linux-x86_64.tar.gz",
-  "sha256": "29f1c98b4bd111ef7f21eaf5a2271591bbf67c0534a68815a5182b6eb5dd2a8b",
-  "size_bytes": 496046,
-  "release_date": "2026-08-24",
-  "download_url": "/downloads/vyper-local-console-linux-x86_64.tar.gz",
+  "filename": "vyper-local-console-linux-x86_64-1.0.0-rc1.tar.gz",
+  "sha256": "e4cdbd9977b3c31a6dec86933d5d1ca5b2422e31e99c0b9c0b7744b77430e4d6",
+  "size_bytes": 419550,
+  "release_date": "2026-08-25",
+  "download_url": "/downloads/vyper-local-console-linux-x86_64-1.0.0-rc1.tar.gz",
   "minimum_agent_protocol": "1",
   "minimum_local_api_version": "2",
-  "signature_status": "checksum-only",
+  "signature_status": "UNSIGNED",
+  "integrity_status": "CHECKSUM_ONLY",
   "signature_type": null,
-  "signature_file": null
+  "signature_file": null,
+  "signature_key_id": null,
+  "sbom": {
+    "filename": "sbom.cdx.json",
+    "format": "CycloneDX",
+    "spec_version": "1.6",
+    "sha256": "aea58d5ea9592d440a3aaee11810862bffe6d9950fdf8b5aaa24e05d3eeec9a6"
+  }
 }

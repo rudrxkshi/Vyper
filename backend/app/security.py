@@ -5,6 +5,9 @@ import hmac
 import json
 import os
 import secrets
+import base64
+import struct
+import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -15,6 +18,7 @@ from sqlalchemy.orm import Session
 from .models import AuditLogRecord
 
 SECRET_MARKERS = ("password", "secret", "token", "credential", "passphrase", "ata_password", "authorization")
+_DEV_MFA_KEY = secrets.token_bytes(32)
 
 
 def _audit_timestamp(value: datetime) -> str:
@@ -41,6 +45,51 @@ def redact(value: Any, secrets_to_remove: tuple[str, ...] = ()) -> Any:
 
 def token_digest(token: str) -> str:
 	return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _mfa_key() -> bytes:
+	configured = os.getenv("VYPER_MFA_ENCRYPTION_KEY")
+	if production_mode() and (not configured or len(configured) < 32):
+		raise RuntimeError("Production MFA requires VYPER_MFA_ENCRYPTION_KEY with at least 32 characters.")
+	return hashlib.sha256(configured.encode("utf-8") if configured else _DEV_MFA_KEY).digest()
+
+
+def encrypt_mfa_secret(secret: str) -> str:
+	key = _mfa_key(); nonce = secrets.token_bytes(16); plain = secret.encode("ascii")
+	stream = b""; counter = 0
+	while len(stream) < len(plain):
+		stream += hmac.new(key, b"mfa-encryption" + nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest(); counter += 1
+	cipher = bytes(a ^ b for a, b in zip(plain, stream))
+	tag = hmac.new(key, b"mfa-authentication" + nonce + cipher, hashlib.sha256).digest()
+	return base64.urlsafe_b64encode(nonce + cipher + tag).decode("ascii")
+
+
+def decrypt_mfa_secret(encoded: str) -> str:
+	raw = base64.urlsafe_b64decode(encoded.encode("ascii")); nonce, body = raw[:16], raw[16:]; cipher, tag = body[:-32], body[-32:]
+	key = _mfa_key(); expected = hmac.new(key, b"mfa-authentication" + nonce + cipher, hashlib.sha256).digest()
+	if not hmac.compare_digest(tag, expected):
+		raise ValueError("MFA secret authentication failed.")
+	stream = b""; counter = 0
+	while len(stream) < len(cipher):
+		stream += hmac.new(key, b"mfa-encryption" + nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest(); counter += 1
+	return bytes(a ^ b for a, b in zip(cipher, stream)).decode("ascii")
+
+
+def new_totp_secret() -> str:
+	return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+
+def totp_code(secret: str, *, at_time: int | None = None) -> str:
+	padding = "=" * ((8 - len(secret) % 8) % 8)
+	key = base64.b32decode((secret + padding).upper()); counter = int(at_time if at_time is not None else time.time()) // 30
+	digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest(); offset = digest[-1] & 0x0F
+	value = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 1_000_000
+	return f"{value:06d}"
+
+
+def verify_totp(secret: str, code: str, *, at_time: int | None = None) -> bool:
+	now = int(at_time if at_time is not None else time.time())
+	return any(hmac.compare_digest(totp_code(secret, at_time=now + drift * 30), str(code)) for drift in (-1, 0, 1))
 
 
 def hash_password(password: str) -> str:

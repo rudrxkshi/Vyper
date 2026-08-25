@@ -1,0 +1,2 @@
+/root/vyper-destruction-validation/sentinel.txt inode=1478968 mode=644 uid=0 gid=0 size=89 blocks=8
+/root/vyper-destruction-validation/sample.bin inode=1478969 mode=644 uid=0 gid=0 size=154 blocks=8

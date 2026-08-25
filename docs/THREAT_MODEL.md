@@ -12,4 +12,4 @@ Threats include malicious operators, compromised central/local hosts, replayed j
 
 ## Residual risk
 
-Application-level audit chaining is tamper-evident, not tamper-proof against a database administrator. Checksum-only releases do not establish publisher identity until a real detached-signature key is configured. A compromised privileged executor can access disks. Firmware may lie or fail unpredictably. Password authentication does not yet include MFA. PostgreSQL backups and signing keys require external secret-management and access-control processes.
+Application-level audit chaining is tamper-evident, not tamper-proof against a database administrator. Checksum-only releases do not establish publisher identity; signed releases require a trusted, non-revoked Ed25519 public-key identity. The root executor has a narrow typed Unix-socket interface, but compromise of that helper still grants storage access. TOTP reduces password-only account compromise but does not protect a fully compromised operator endpoint. Firmware may lie or fail unpredictably. PostgreSQL backups and signing keys require external secret-management and access-control processes.

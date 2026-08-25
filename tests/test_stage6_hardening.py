@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, inspect, text
 
 from backend.app.db import default_database_url
 from backend.app.main import create_app
-from backend.app.models import AgentAssetRecord, AgentRecord, AuditLogRecord, UserRecord
+from backend.app.models import AgentAssetRecord, AgentRecord, AuditLogRecord, OperatorSessionRecord, UserRecord
 from backend.app.security import hash_password, verify_audit_chain
 from local_agent.cli import verify_package
 from local_agent.process_worker import ProcessJobExecutor
@@ -87,6 +87,9 @@ def test_operator_can_request_but_auditor_cannot_and_confirmation_is_required(tm
 		payload["destructive_confirmation"] = None
 		assert client.post(f"/agents/{agent_id}/jobs", json=payload).status_code == 422
 		payload["destructive_confirmation"] = "SANITIZE"
+		with app.state.session_factory() as db:
+			session = db.query(OperatorSessionRecord).filter(OperatorSessionRecord.revoked_at.is_(None)).one()
+			session.mfa_assurance = "TOTP"; db.commit()
 		response = client.post(f"/agents/{agent_id}/jobs", json=payload)
 		assert response.status_code == 201
 		assert response.json()["requested_by"] == "operator:operator"
@@ -142,7 +145,7 @@ def test_alembic_upgrades_empty_database_and_records_revision(tmp_path):
 		tables = set(inspect(connection).get_table_names())
 		revision = connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
 	assert {"users", "operator_sessions", "central_jobs", "audit_logs"}.issubset(tables)
-	assert revision == "0001_stage6_baseline"
+	assert revision == "0002_stage13_mfa_sessions"
 
 
 def test_postgresql_transaction_rollback_when_ci_database_is_available():
