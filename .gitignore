@@ -10,6 +10,8 @@ build/
 node_modules/
 .next/
 backend/vyper.db
+backend/vyper.db-wal
+backend/vyper.db-shm
 local_agent/vyper_local.db
 local_agent/agent_credentials.json
 *.db-journal

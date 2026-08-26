@@ -7,6 +7,7 @@ import os
 import shutil
 import sqlite3
 import stat
+import subprocess
 import tarfile
 import tomllib
 from types import SimpleNamespace
@@ -295,3 +296,13 @@ def test_artifact_excludes_forbidden_development_and_secret_files():
 		parts = set(Path(member.name).parts)
 		assert not (parts & forbidden_parts)
 		assert not member.name.endswith((".db", ".pyc", ".map"))
+
+
+def test_runtime_sqlite_artifacts_are_ignored_and_not_tracked():
+	ignored = set((ROOT / ".gitignore").read_text(encoding="utf-8").splitlines())
+	assert {"backend/vyper.db", "backend/vyper.db-wal", "backend/vyper.db-shm"} <= ignored
+	tracked = subprocess.run(
+		["git", "ls-files", "--", "*.db", "*.db-wal", "*.db-shm", "*.sqlite", "*.sqlite3"],
+		cwd=ROOT, check=True, capture_output=True, text=True,
+	).stdout.splitlines()
+	assert tracked == []
