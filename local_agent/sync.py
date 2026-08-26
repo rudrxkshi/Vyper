@@ -29,12 +29,19 @@ class AgentCredentialStore:
 
 	def save(self, credential: dict[str, str]) -> None:
 		self.path.parent.mkdir(parents=True, exist_ok=True)
-		flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+		payload = json.dumps(credential, sort_keys=True, separators=(",", ":")).encode("utf-8")
+		flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 		fd = os.open(self.path, flags, 0o600)
 		try:
-			with os.fdopen(fd, "w", encoding="utf-8") as handle:
-				json.dump(credential, handle, sort_keys=True)
+			view = memoryview(payload)
+			while view:
+				written = os.write(fd, view)
+				if written <= 0:
+					raise OSError("Credential write did not make progress.")
+				view = view[written:]
+			os.fsync(fd)
 		finally:
+			os.close(fd)
 			try:
 				os.chmod(self.path, 0o600)
 			except OSError:

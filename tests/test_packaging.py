@@ -123,7 +123,17 @@ def test_fresh_install_fixture_initializes_runtime_state_and_all_cli_wrappers(tm
 		assert wrapper.is_file() and f"/opt/vyper/runtime/bin/{command}" in wrapper.read_text(encoding="utf-8")
 	assert (rootfs / "opt/vyper/ui/index.html").read_text(encoding="utf-8") == "VYPER"
 	assert (rootfs / "etc/vyper/config.toml").is_file()
-	assert not (rootfs / "etc/vyper/agent-identity.json").exists()
+	credential = rootfs / "etc/vyper/agent-identity.json"
+	assert credential.is_file() and credential.read_bytes() == b""
+	assert stat.S_IMODE(credential.stat().st_mode) == 0o600 or os.name == "nt"
+	assert stat.S_IMODE((rootfs / "etc/vyper").stat().st_mode) == 0o750 or os.name == "nt"
+	store = AgentCredentialStore(credential)
+	store.save({"agent_id": "agent-test", "agent_token": "fixture-secret", "agent_protocol_version": "1"})
+	assert store.load() == {"agent_id": "agent-test", "agent_token": "fixture-secret", "agent_protocol_version": "1"}
+	install_script = (ROOT / "packaging/linux/install.sh").read_text(encoding="utf-8")
+	assert 'chown vyper-agent:vyper-executor "$etc/agent-identity.json"' in install_script
+	assert 'chmod 0600 "$etc/agent-identity.json"' in install_script
+	assert 'chmod 0750 "$etc"' in install_script
 
 
 def test_upgrade_preserves_jobs_outbox_correlation_evidence_and_operator_state(tmp_path):

@@ -52,6 +52,11 @@ def install_layout(package_root: Path, root: Path, *, test_mode: bool = False) -
 	if not config.exists():
 		shutil.copy2(package_root / "payload" / "config.toml", config)
 		os.chmod(config, 0o640)
+	credential = config_dir / "agent-identity.json"
+	if not credential.exists():
+		fd = os.open(credential, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+		os.close(fd)
+	os.chmod(credential, 0o600)
 	if test_mode:
 		runtime_bin = opt / "runtime" / "bin"
 		runtime_bin.mkdir(parents=True, exist_ok=True)
