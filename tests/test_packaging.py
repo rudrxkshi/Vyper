@@ -213,7 +213,9 @@ def test_systemd_units_enforce_loopback_unprivileged_ui_and_no_shell_service():
 	assert 'local_console_bind = "127.0.0.1"' in config
 	executor = (ROOT / "packaging/linux/systemd/vyper-executor.service").read_text(encoding="utf-8")
 	assert "User=vyper-agent" in agent and "VYPER_EXECUTOR_SOCKET" in agent
-	assert "User=root" in executor and "RestrictAddressFamilies=AF_UNIX" in executor
+	assert "User=root" in executor and "Group=vyper-executor" in executor
+	assert "RuntimeDirectory=vyper" in executor and "RuntimeDirectoryMode=0750" in executor
+	assert "RestrictAddressFamilies=AF_UNIX" in executor
 	assert "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN" in executor
 	assert "AmbientCapabilities=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN" in executor
 	assert "User=vyper-ui" in console and "User=root" not in console

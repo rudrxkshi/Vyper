@@ -6,7 +6,7 @@ Before=vyper-agent.service
 [Service]
 Type=simple
 User=root
-Group=root
+Group=vyper-executor
 WorkingDirectory=/opt/vyper
 Environment=VYPER_EXECUTOR_SOCKET=/run/vyper/executor.sock
 Environment=VYPER_EXECUTOR_GROUP=vyper-executor
