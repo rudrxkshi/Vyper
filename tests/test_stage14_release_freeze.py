@@ -34,9 +34,9 @@ def test_release_version_is_consistent_everywhere():
 
 def test_frozen_protocol_and_migration_versions():
 	assert API_VERSION == "2" and BOOT_JOB_VERSION == "1"
-	assert SUPPORTED_ALEMBIC_HEAD == "0002_stage13_mfa_sessions"
+	assert SUPPORTED_ALEMBIC_HEAD == "0003_central_certificates"
 	migrations = sorted(path.stem for path in (ROOT / "migrations/versions").glob("*.py") if not path.name.startswith("__"))
-	assert migrations == ["0001_stage6_baseline", "0002_stage13_mfa_sessions"]
+	assert migrations == ["0001_stage6_baseline", "0002_stage13_mfa_sessions", "0003_central_certificates"]
 
 
 def test_production_schema_gate_requires_exact_alembic_head(tmp_path):

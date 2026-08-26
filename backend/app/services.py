@@ -249,7 +249,9 @@ def certificate_to_dict(certificate: CertificateRecord) -> dict[str, Any]:
     return {
         "id": certificate.id,
         "certificate_id": certificate.certificate_id,
-        "job_id": certificate.job_id,
+        "job_id": getattr(certificate, "job_id", None),
+        "central_job_id": getattr(certificate, "central_job_id", None),
+        "local_job_id": getattr(certificate, "local_job_id", None),
         "target": certificate.target,
         "final_status": certificate.final_status,
         "certificate_hash": certificate.certificate_hash,

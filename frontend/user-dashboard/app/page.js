@@ -22,6 +22,7 @@ import {
 import {
   JOB_STATE_META,
   auditLogView,
+  auditLogsForJob,
   certificateView,
   filterAssets,
   filterAuditLogs,
@@ -35,6 +36,7 @@ import {
   normalizeCentralJob,
   normalizeLocalJob,
   normalizeRemoteAgent,
+  remoteAssetsForJob,
   shouldPollLocalJob,
 } from "../lib/presentation.mjs";
 
@@ -219,9 +221,11 @@ export default function VyperDashboard() {
           apiClient.listCentralJobs(),
         ]);
         assetsData = persistedAssets;
-        setJobs(jobsData);
+        const normalizedCentralJobs = centralJobsData.map(normalizeCentralJob);
+        const allJobs = [...jobsData, ...normalizedCentralJobs];
+        setJobs(allJobs);
         setSelectedJobId((current) =>
-          jobsData.some((job) => job.id === current) ? current : jobsData[0]?.id || null,
+          allJobs.some((job) => job.id === current) ? current : allJobs[0]?.id || null,
         );
         setCerts(certsData);
         setSelectedCertId((current) =>
@@ -232,7 +236,7 @@ export default function VyperDashboard() {
         setAuditLogs(auditData);
         const normalizedAgents = agentsData.map(normalizeRemoteAgent);
         setRemoteAgents(normalizedAgents);
-        setCentralJobs(centralJobsData.map(normalizeCentralJob));
+        setCentralJobs(normalizedCentralJobs);
         setSelectedAgentId((current) => current || normalizedAgents[0]?.agent_id || "");
       }
 
@@ -394,8 +398,11 @@ export default function VyperDashboard() {
   const selectedJobCertificateView = selectedJob?.certificate
     ? certificateView(selectedJob.certificate)
     : null;
+  const selectedJobAuditLogs = auditLogsForJob(selectedJob, auditLogs);
 
   const filteredAuditLogs = filterAuditLogs(auditLogs, { actor: auditActor, action: auditAction });
+  const selectableRemoteAssets = remoteAssetsForJob(remoteAssets, remoteJobForm);
+  const selectedRemoteAssetIsSelectable = selectableRemoteAssets.some((asset) => asset.id === remoteJobForm.assetId);
   const counts = {
     total: assets.length,
     verified: jobs.filter((j) => getJobStateMeta(j.job_state).successful).length,
@@ -405,7 +412,7 @@ export default function VyperDashboard() {
 
   async function submitRemoteJob(event) {
     event.preventDefault();
-    if (!selectedAgentId || !remoteJobForm.assetId) {
+    if (!selectedAgentId || !remoteJobForm.assetId || !selectedRemoteAssetIsSelectable) {
       setRemoteJobError("Choose an enrolled agent and synchronized asset.");
       return;
     }
@@ -778,13 +785,13 @@ export default function VyperDashboard() {
                 <div className="nb-card">
                   <div className="nb-section-title">Create remote job</div>
                   <form onSubmit={submitRemoteJob}>
-                    <div className="nb-field"><label>Synchronized asset</label><select value={remoteJobForm.assetId} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, assetId: event.target.value })}>{remoteAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.device_path} — {asset.model || "Unknown"} — {asset.serial_number || "No serial"}</option>)}</select></div>
+                    <div className="nb-field"><label>Synchronized asset</label><select value={selectedRemoteAssetIsSelectable ? remoteJobForm.assetId : ""} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, assetId: event.target.value })}><option value="" disabled>Choose an eligible asset</option>{selectableRemoteAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.device_path} — {asset.model || "Unknown"} — {asset.serial_number || "No serial"}</option>)}</select></div>
                     <div className="nb-field"><label>Execution mode</label><select value={remoteJobForm.executionMode} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, executionMode: event.target.value })}><option value="normal_local">Normal local job</option><option value="boot_sanitize">System-disk temporary boot job</option></select></div>
                     {remoteJobForm.executionMode === "boot_sanitize" && <div className="nb-callout"><b>No-USB boot workflow.</b> The installed OS only prepares a one-shot boot. Sanitization requires fresh confirmation in the independent boot environment.</div>}
                     <div className="nb-check"><input type="checkbox" checked={remoteJobForm.dryRun} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, dryRun: event.target.checked })} /><div>Dry run. The agent may execute this automatically if locally configured.</div></div>
                     {!remoteJobForm.dryRun && <div className="nb-check" style={{ marginTop: 8 }}><input type="checkbox" checked={remoteJobForm.authorized} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, authorized: event.target.checked })} /><div><b>Central authorization.</b> This does not replace local operator approval.</div></div>}
                     {remoteJobError && <div className="nb-error">{remoteJobError}</div>}
-                    <div className="nb-btn-row"><button className="nb-btn primary" disabled={!remoteJobForm.assetId}>Queue remote job</button></div>
+                    <div className="nb-btn-row"><button className="nb-btn primary" disabled={!selectedRemoteAssetIsSelectable}>Queue remote job</button></div>
                   </form>
                 </div>
               </div>
@@ -1110,7 +1117,7 @@ export default function VyperDashboard() {
                     <table>
                       <thead><tr><th>Action</th><th>Actor</th><th>Target</th><th>Created</th></tr></thead>
                       <tbody>
-                        {(selectedJob.audit_logs || []).map((log) => {
+                        {selectedJobAuditLogs.map((log) => {
                           const audit = auditLogView(log);
                           return (
                             <tr key={log.id}>
@@ -1121,7 +1128,7 @@ export default function VyperDashboard() {
                             </tr>
                           );
                         })}
-                        {(selectedJob.audit_logs || []).length === 0 && (
+                        {selectedJobAuditLogs.length === 0 && (
                           <tr><td colSpan={4} style={{ textAlign: "center", color: "#8A8878" }}>No audit entries for this job.</td></tr>
                         )}
                       </tbody>

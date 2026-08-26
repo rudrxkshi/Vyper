@@ -83,7 +83,8 @@ def test_password_only_session_cannot_create_destructive_central_job(tmp_path, m
 				agent_version="1", api_version="2", agent_protocol_version="1", status="ONLINE", enrolled_at=now,
 				metadata_json={}, token_hash="a" * 64)
 			asset = AgentAssetRecord(id=str(uuid4()), agent_id=agent.agent_id, hardware_identity="b" * 64,
-				device_path="/dev/mock", device_type="HDD", identity_confidence="HIGH", profile_json={}, observations_json=[],
+				device_path="/dev/mock", device_type="HDD", identity_confidence="HIGH",
+				profile_json={"is_system_device": False, "mounted": False, "eligible_for_sanitization": True}, observations_json=[],
 				first_seen_at=now, last_seen_at=now)
 			db.add_all([agent, asset]); db.commit(); agent_id, asset_id = agent.agent_id, asset.id
 		client.post("/auth/login", json={"username": "operator", "password": "Correct-Horse-42!"})

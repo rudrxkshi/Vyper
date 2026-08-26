@@ -221,18 +221,47 @@ export function normalizeRemoteAgent(agent) {
 }
 
 export function normalizeCentralJob(job) {
+  const result = job?.result || {};
   return {
     ...job,
     id: job?.central_job_id,
+    target: job?.requested_target,
     job_state: job?.local_execution_state || job?.status || "QUEUED",
     final_status: job?.final_status ?? null,
     progress: job?.progress ?? null,
+    dry_run: Boolean(job?.dry_run ?? job?.request?.dry_run),
+    execution_json: result.execution ?? null,
+    verification_json: result.verification ?? null,
+    evidence_json: result.evidence ?? null,
+    state_history_json: result.state_history || job?.events || [],
+    error_json: result.error ?? null,
+    certificate: result.certificate ?? null,
     waiting_local_approval: job?.status === "WAITING_LOCAL_APPROVAL",
     execution_mode: job?.execution_mode || job?.request?.execution_mode || "normal_local",
     boot_lifecycle: (job?.execution_mode || job?.request?.execution_mode) === "boot_sanitize"
       ? (job?.boot_lifecycle || job?.local_execution_state || job?.status || "PREPARING_BOOT")
       : null,
   };
+}
+
+export function auditLogsForJob(job, auditLogs = []) {
+  if (!job) return [];
+  if (job.central_job_id) {
+    const resource = `central-job:${job.central_job_id}`;
+    return auditLogs.filter((entry) => entry?.resource === resource);
+  }
+  const matched = auditLogs.filter((entry) => entry?.job_id === job.id);
+  return matched.length ? matched : (Array.isArray(job.audit_logs) ? job.audit_logs : []);
+}
+
+export function remoteAssetsForJob(assets = [], { dryRun = true, executionMode = "normal_local" } = {}) {
+  if (dryRun || executionMode !== "normal_local") return assets;
+  return assets.filter((asset) => {
+    const profile = asset?.profile_json || {};
+    return profile.is_system_device !== true
+      && profile.mounted === false
+      && profile.eligible_for_sanitization === true;
+  });
 }
 
 export function getDeviceProtection(device) {

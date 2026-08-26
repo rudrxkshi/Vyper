@@ -28,7 +28,7 @@ from .routers.downloads import router as downloads_router
 from .routers.jobs import router as jobs_router
 from .routers.results import router as results_router
 
-SUPPORTED_ALEMBIC_HEAD = "0002_stage13_mfa_sessions"
+SUPPORTED_ALEMBIC_HEAD = "0003_central_certificates"
 
 
 def require_supported_schema(engine) -> None:

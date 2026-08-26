@@ -74,7 +74,8 @@ def test_operator_can_request_but_auditor_cannot_and_confirmation_is_required(tm
 				architecture="x86_64", agent_version="1", api_version="2", agent_protocol_version="1",
 				status="ONLINE", enrolled_at=now, metadata_json={}, token_hash="a" * 64)
 			asset = AgentAssetRecord(id=str(uuid4()), agent_id=agent.agent_id, hardware_identity="b" * 64,
-				identity_confidence="HIGH", device_path="/dev/mock", device_type="HDD", profile_json={},
+				identity_confidence="HIGH", device_path="/dev/mock", device_type="HDD",
+				profile_json={"is_system_device": False, "mounted": False, "eligible_for_sanitization": True},
 				observations_json=[], first_seen_at=now, last_seen_at=now)
 			db.add_all([agent, asset]); db.commit()
 			agent_id, asset_id = agent.agent_id, asset.id
@@ -145,7 +146,7 @@ def test_alembic_upgrades_empty_database_and_records_revision(tmp_path):
 		tables = set(inspect(connection).get_table_names())
 		revision = connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
 	assert {"users", "operator_sessions", "central_jobs", "audit_logs"}.issubset(tables)
-	assert revision == "0002_stage13_mfa_sessions"
+	assert revision == "0003_central_certificates"
 
 
 def test_postgresql_transaction_rollback_when_ci_database_is_available():

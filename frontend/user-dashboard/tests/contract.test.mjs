@@ -18,6 +18,7 @@ import {
 } from "../lib/api.mjs";
 import {
   auditLogView,
+  auditLogsForJob,
   certificateView,
   filterAssets,
   filterAuditLogs,
@@ -29,9 +30,21 @@ import {
   normalizeDiscoveredDevices,
   normalizeCentralJob,
   normalizeLocalJob,
+  remoteAssetsForJob,
   normalizeRemoteAgent,
   shouldPollLocalJob,
 } from "../lib/presentation.mjs";
+
+test("central job detail associates null-job-id audits by central resource while preserving legacy lookup", () => {
+  const audits = [
+    { id: "central-audit", job_id: null, resource: "central-job:central-1", action: "RESULT_ACCEPTED" },
+    { id: "other-central", job_id: null, resource: "central-job:central-2", action: "RESULT_ACCEPTED" },
+    { id: "legacy-audit", job_id: "legacy-1", resource: "job:legacy-1", action: "JOB_COMPLETED" },
+  ];
+  const central = normalizeCentralJob({ central_job_id: "central-1", requested_target: "/dev/sdb" });
+  assert.deepEqual(auditLogsForJob(central, audits).map((entry) => entry.id), ["central-audit"]);
+  assert.deepEqual(auditLogsForJob({ id: "legacy-1" }, audits).map((entry) => entry.id), ["legacy-audit"]);
+});
 
 test("sanitize request matches the backend SanitizeJobCreate shape", async () => {
   const form = {
@@ -236,6 +249,22 @@ test("an explicitly ineligible discovery record is not treated as safe", () => {
 
   assert.equal(protection.blocked, true);
   assert.match(protection.reason, /did not establish/i);
+});
+
+test("destructive remote selector excludes unsafe assets without changing inventory", () => {
+  const assets = [
+    { id: "system", device_path: "/dev/sda", profile_json: { is_system_device: true, mounted: true, eligible_for_sanitization: false } },
+    { id: "mounted", device_path: "/dev/sdc", profile_json: { is_system_device: false, mounted: true, eligible_for_sanitization: true } },
+    { id: "ineligible", device_path: "/dev/sdd", profile_json: { is_system_device: false, mounted: false, eligible_for_sanitization: false } },
+    { id: "eligible", device_path: "/dev/sdb", profile_json: { is_system_device: false, mounted: false, eligible_for_sanitization: true } },
+  ];
+
+  assert.deepEqual(
+    remoteAssetsForJob(assets, { dryRun: false, executionMode: "normal_local" }).map((asset) => asset.id),
+    ["eligible"],
+  );
+  assert.equal(remoteAssetsForJob(assets, { dryRun: true, executionMode: "normal_local" }).length, 4);
+  assert.equal(assets.length, 4);
 });
 
 test("local agent job responses normalize into dashboard records", () => {
