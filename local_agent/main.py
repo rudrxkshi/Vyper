@@ -219,6 +219,17 @@ def create_app(
 			raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Local job not found.")
 		return job
 
+	@app.get("/certificates", tags=["certificates"], dependencies=[Depends(_require_local_api_key)])
+	def list_certificates(limit: int = Query(default=100, ge=1, le=500)):
+		return store().list_certificates(limit=limit)
+
+	@app.get("/audit-logs", tags=["audit"], dependencies=[Depends(_require_local_api_key)])
+	def list_audit_logs(
+		job_id: str | None = None,
+		limit: int = Query(default=500, ge=1, le=1000),
+	):
+		return store().list_audit_events(local_job_id=job_id, limit=limit)
+
 	@app.post(
 		"/jobs/{local_job_id}/cancel",
 		response_model=LocalJobResponse,

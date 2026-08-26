@@ -354,6 +354,28 @@ test("local-mode client rejects a central service identity", async () => {
   assert.equal(await checkBackendConnection(client), false);
 });
 
+test("local console reads certificate and lifecycle projections from local endpoints", async () => {
+  const requestedUrls = [];
+  const client = createApiClient({
+    baseUrl: "http://127.0.0.1:8765",
+    expectedService: "local-agent",
+    fetchImpl: async (url) => {
+      requestedUrls.push(url);
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  assert.deepEqual(await client.listCertificates(), []);
+  assert.deepEqual(await client.listAuditLogs(), []);
+  assert.deepEqual(requestedUrls, [
+    "http://127.0.0.1:8765/certificates",
+    "http://127.0.0.1:8765/audit-logs",
+  ]);
+});
+
 test("central remote jobs use an agent-owned synchronized asset contract", async () => {
   let requestedUrl;
   let requestedBody;

@@ -197,15 +197,24 @@ export default function VyperDashboard() {
     try {
       let assetsData;
       if (localMode) {
-        const [devicesData, localJobsData, remoteRequestsData, syncStatusData] = await Promise.all([
+        const [devicesData, localJobsData, localCertificatesData, localAuditData, remoteRequestsData, syncStatusData] = await Promise.all([
           apiClient.listDevices(),
           apiClient.listJobs(),
+          apiClient.listCertificates(),
+          apiClient.listAuditLogs(),
           apiClient.listRemoteJobs(),
           apiClient.getSyncStatus(),
         ]);
         assetsData = normalizeDiscoveredDevices(devicesData);
         setRemoteRequests(remoteRequestsData);
         setSyncStatus(syncStatusData);
+        setCerts(localCertificatesData);
+        setSelectedCertId((current) =>
+          localCertificatesData.some((certificate) => certificate.id === current)
+            ? current
+            : localCertificatesData[0]?.id || null,
+        );
+        setAuditLogs(localAuditData);
         const normalizedJobs = localJobsData.map(normalizeLocalJob);
         setJobs(normalizedJobs);
         setSelectedJobId((current) =>
@@ -1255,7 +1264,7 @@ export default function VyperDashboard() {
             <>
               <div className="nb-crumbs">Audit logs</div>
               <h1 className="nb-h1 nb-heading">Audit trail</h1>
-              <p className="nb-sub">Request and response entries with actor metadata and timestamps.</p>
+              <p className="nb-sub">{localMode ? "Locally recorded job lifecycle events with their original sequence and timestamps." : "Request and response entries with actor metadata and timestamps."}</p>
               <div className="nb-card">
                 <div className="nb-filter-row">
                   <div className="nb-search">
