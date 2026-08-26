@@ -11,9 +11,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, ValidationError
 
 from agent.agent import OrchestrationJobResult, VYPERAgent
-<<<<<<< HEAD
-from agent.credentials import AgentCredentialStore, configured_agent_api_key
-=======
+from agent.credentials import AgentCredentialStore
 from local_agent.schemas import LocalJobAccepted, LocalJobResponse
 
 
@@ -35,7 +33,6 @@ class _LegacyLocalJobResponse(BaseModel):
 
 class AgentGatewayError(RuntimeError):
     """Raised when a configured local-agent transport fails safely."""
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a
 
 
 def _normalize_result(result: OrchestrationJobResult | dict[str, Any]) -> dict[str, Any]:
@@ -158,10 +155,6 @@ class RemoteLocalAgentGateway:
 def build_agent_gateway() -> AgentGateway:
     agent_api_url = os.getenv("VYPER_AGENT_API_URL")
     if agent_api_url:
-<<<<<<< HEAD
-        return HttpAgentGateway(agent_api_url, api_key=configured_agent_api_key())
-    return LocalAgentGateway()
-=======
         central_api_url = os.getenv("VYPER_CENTRAL_API_URL") or os.getenv("VYPER_PUBLIC_API_URL")
         return RemoteLocalAgentGateway(
             agent_api_url,
@@ -173,4 +166,3 @@ def build_agent_gateway() -> AgentGateway:
 
 # Backward-compatible import only; new code should use the explicit local-agent name.
 HttpAgentGateway = RemoteLocalAgentGateway
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a

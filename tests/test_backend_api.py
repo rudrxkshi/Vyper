@@ -7,12 +7,8 @@ from fastapi.testclient import TestClient
 from agent.agent import OrchestrationJobResult
 from agent.certificate import CertificateBuilder
 from agent.common import JobState, SanitizationResult, SanitizationStatus
-<<<<<<< HEAD
 from agent.credentials import AgentCredentialStore
-from agent.evidence import EvidenceRecord
-=======
 from agent.evidence import EvidenceCollector
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a
 from agent.policy import PolicyDecision
 from agent.profiler import DeviceProfile
 from agent.verifier import VerificationResult
@@ -86,16 +82,11 @@ def _orchestration_result() -> OrchestrationJobResult:
     )
 
 
-<<<<<<< HEAD
 def test_backend_persists_jobs_devices_and_certificates(tmp_path, monkeypatch):
     monkeypatch.delenv("VYPER_API_KEY", raising=False)
     monkeypatch.setenv("VYPER_AGENT_CREDENTIALS_PATH", str(tmp_path / "missing_credentials.json"))
-    app = create_app(database_url=f"sqlite:///{tmp_path / 'vyper.db'}", agent_gateway=StubGateway(_orchestration_result()))
-=======
-def test_backend_persists_jobs_devices_and_certificates(tmp_path):
     result = _orchestration_result()
     app = create_app(database_url=f"sqlite:///{tmp_path / 'vyper.db'}", agent_gateway=StubGateway(result))
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a
 
     with TestClient(app) as client:
         response = client.post(
@@ -127,10 +118,10 @@ def test_backend_persists_jobs_devices_and_certificates(tmp_path):
         assert audit_logs[0]["action"] == "sanitize_device"
 
 
-<<<<<<< HEAD
 def test_backend_accepts_gui_generated_agent_key(tmp_path, monkeypatch):
     credentials_path = tmp_path / "agent_credentials.json"
     monkeypatch.delenv("VYPER_API_KEY", raising=False)
+    monkeypatch.setenv("VYPER_DEV_ANONYMOUS_OPERATOR", "false")
     monkeypatch.setenv("VYPER_AGENT_CREDENTIALS_PATH", str(credentials_path))
     credentials = AgentCredentialStore(path=credentials_path).generate()
     app = create_app(database_url=f"sqlite:///{tmp_path / 'vyper.db'}", agent_gateway=StubGateway(_orchestration_result()))
@@ -149,7 +140,8 @@ def test_backend_accepts_gui_generated_agent_key(tmp_path, monkeypatch):
         assert rejected.status_code == 401
         assert accepted.status_code == 201
         assert accepted.json()["authorization_json"]["agent_api_key"] == "<redacted>"
-=======
+
+
 def test_backend_rejects_verified_result_without_integrity_hashes(tmp_path):
     result = _orchestration_result()
     result.evidence.integrity_hash = ""
@@ -182,4 +174,3 @@ def test_backend_rejects_legacy_flat_sanitize_request(tmp_path):
         invalid_fields = {item["loc"][-1] for item in detail}
         assert {"authorized", "ata_password"} <= invalid_fields
         assert client.get("/jobs").json() == []
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a

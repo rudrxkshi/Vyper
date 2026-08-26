@@ -181,12 +181,17 @@ class AgentEnrollRequest(BaseModel):
     agent_version: str = Field(min_length=1)
     api_version: str = "2"
     agent_protocol_version: str = "1"
+    device_public_key_pem: str | None = None
+    device_public_key_id: str | None = Field(default=None, min_length=64, max_length=64)
+    identity_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class AgentEnrollResponse(BaseModel):
     agent_id: str
     agent_token: str
     agent_protocol_version: str = "1"
+    command_verification_key_pem: str | None = None
+    command_verification_key_id: str | None = None
 
 
 class AgentHeartbeat(BaseModel):
@@ -199,6 +204,10 @@ class AgentHeartbeat(BaseModel):
     architecture: str
     local_status: str | None = None
     active_job_count: int = Field(default=0, ge=0)
+    current_state: str | None = None
+    active_job_id: str | None = None
+    connectivity_status: str | None = None
+    hardware_status: dict[str, Any] = Field(default_factory=dict)
 
 
 class InventoryDevice(BaseModel):

@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import hmac
 import os
-<<<<<<< HEAD
-import hmac
-=======
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -37,7 +34,6 @@ class OperatorPrincipal:
 	@property
 	def audit_identity(self) -> str:
 		return f"operator:{self.username}"
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a
 
 
 from agent.credentials import AgentCredentialStore
@@ -46,19 +42,11 @@ api_key_header = APIKeyHeader(name="X-VYPER-API-Key", auto_error=False)
 bearer = HTTPBearer(auto_error=False)
 
 
-<<<<<<< HEAD
-def require_api_key(api_key: str | None = Security(api_key_header)) -> None:
-    expected_key = os.getenv("VYPER_API_KEY") or _local_agent_api_key()
-    if not expected_key:
-        return
-    if not api_key or not hmac.compare_digest(api_key, expected_key):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key.")
-
-
 def _local_agent_api_key() -> str | None:
     credentials = AgentCredentialStore().load()
     return credentials.api_key if credentials else None
-=======
+
+
 def _session_principal(token: str | None, db: Session) -> OperatorPrincipal | None:
 	if not token:
 		return None
@@ -99,7 +87,7 @@ def require_api_key(
 
 	# Explicitly development-only compatibility. It is impossible to enable in production.
 	if not production_mode():
-		expected = os.getenv("VYPER_API_KEY")
+		expected = os.getenv("VYPER_API_KEY") or _local_agent_api_key()
 		if expected and api_key and hmac.compare_digest(api_key, expected):
 			principal = OperatorPrincipal(None, "development-api-key", OperatorRole.ADMIN, True)
 			request.state.operator = principal
@@ -117,4 +105,3 @@ def require_roles(*roles: OperatorRole) -> Callable:
 			raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operator role is not authorized for this action.")
 		return principal
 	return dependency
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a

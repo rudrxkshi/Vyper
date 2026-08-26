@@ -22,6 +22,7 @@ from ..agent_protocol import (
 	utc_now,
 )
 from ..auth import OperatorPrincipal, OperatorRole, require_roles
+from ..command_signing import command_public_key_id, command_public_key_pem, sign_command
 from ..db import get_db
 from ..models import AgentAssetRecord, AgentRecord, CentralJobEventRecord, CentralJobRecord, EnrollmentTokenRecord
 from ..schemas import (
@@ -36,7 +37,7 @@ from ..schemas import (
 	InventoryUpload,
 )
 from ..services import validate_result_integrity
-from ..security import record_audit_event
+from ..security import record_audit_event, record_security_event
 
 
 router = APIRouter(tags=["agents"])
@@ -133,6 +134,7 @@ def _job_dict(job: CentralJobRecord, db: Session) -> dict[str, Any]:
 		"nonce": job.nonce,
 		"integrity_status": job.integrity_status,
 		"execution_mode": (job.request_json or {}).get("execution_mode", "normal_local"),
+		"command": job.command_json,
 		"events": [
 			{
 				"sequence": event.sequence,
@@ -196,8 +198,11 @@ def enroll_agent(payload: AgentEnrollRequest, db: Session = Depends(get_db)):
 		agent_protocol_version=payload.agent_protocol_version,
 		status="OFFLINE",
 		enrolled_at=now,
-		metadata_json={},
+		metadata_json={"identity_mode": "ed25519" if payload.device_public_key_pem else "bearer-only"},
 		token_hash=token_hash(agent_token),
+		public_key_pem=payload.device_public_key_pem,
+		public_key_id=payload.device_public_key_id,
+		identity_fingerprint=payload.identity_fingerprint,
 	)
 	claimed = db.execute(
 		update(EnrollmentTokenRecord).where(
@@ -211,13 +216,23 @@ def enroll_agent(payload: AgentEnrollRequest, db: Session = Depends(get_db)):
 		raise HTTPException(status_code=409, detail="Enrollment token was already consumed.")
 	db.add(agent)
 	record_audit_event(db, actor=f"enrollment-token:{record.id}", action="AGENT_ENROLLED", resource=f"agent:{agent_id}",
-		metadata={"hostname": payload.hostname, "platform": payload.platform, "architecture": payload.architecture})
+		metadata={"hostname": payload.hostname, "platform": payload.platform, "architecture": payload.architecture,
+			"public_key_id": payload.device_public_key_id, "identity_fingerprint": payload.identity_fingerprint})
+	record_security_event(db, event_type="DEVICE_REGISTERED", severity="INFO", actor=f"enrollment-token:{record.id}",
+		resource=f"agent:{agent_id}", agent_id=agent_id,
+		metadata={"hostname": payload.hostname, "identity_mode": agent.metadata_json["identity_mode"]})
 	try:
 		db.commit()
 	except IntegrityError as exc:
 		db.rollback()
 		raise HTTPException(status_code=409, detail="Enrollment token was already consumed.") from exc
-	return {"agent_id": agent_id, "agent_token": agent_token, "agent_protocol_version": AGENT_PROTOCOL_VERSION}
+	return {
+		"agent_id": agent_id,
+		"agent_token": agent_token,
+		"agent_protocol_version": AGENT_PROTOCOL_VERSION,
+		"command_verification_key_pem": command_public_key_pem(),
+		"command_verification_key_id": command_public_key_id(),
+	}
 
 
 @router.get("/agents", dependencies=[Depends(_OPERATOR_READ)])

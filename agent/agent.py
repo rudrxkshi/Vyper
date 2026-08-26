@@ -61,13 +61,10 @@ class VYPERAgent:
         verifier: Verifier | None = None,
         evidence_collector: EvidenceCollector | None = None,
         certificate_builder: CertificateBuilder | None = None,
-<<<<<<< HEAD
         credential_store: AgentCredentialStore | None = None,
         api_key_required: bool = False,
         expected_api_key: str | None = None,
-=======
         nvme_scope_resolver: Callable[[str], dict[str, Any]] | None = None,
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a
     ) -> None:
         self.dry_run = dry_run
         self.profiler = profiler or DeviceProfiler(dry_run=dry_run)
@@ -77,18 +74,15 @@ class VYPERAgent:
             dry_run=dry_run, agent_version=f"vyper-agent/{__version__}"
         )
         self.certificate_builder = certificate_builder or CertificateBuilder()
-<<<<<<< HEAD
         self.credential_store = credential_store or AgentCredentialStore()
         self.api_key_required = bool(api_key_required)
         self.expected_api_key = expected_api_key
-=======
         resolver = NVMeControllerResolver(
             profiler=self.profiler,
             command_executor=getattr(self.profiler, "command_executor", None),
             sysfs_root=getattr(self.profiler, "sysfs_root", "/sys"),
         )
         self.nvme_scope_resolver = nvme_scope_resolver or resolver.resolve
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a
 
     def sanitize_device(
         self,
@@ -525,7 +519,6 @@ class VYPERAgent:
             message="Workflow completed.",
         )
 
-<<<<<<< HEAD
     def _api_key_verification_enabled(self) -> bool:
         return bool(self.api_key_required or self.expected_api_key)
 
@@ -582,10 +575,7 @@ class VYPERAgent:
             message=reason,
         )
 
-    def _resolve_pathway(self, pathway_name: str, dry_run: bool):
-=======
     def _resolve_pathway(self, pathway_name: str, dry_run: bool, *, progress_callback=None):
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a
         if pathway_name == "HDD_OVERWRITE":
             return HDDOverwritePathway(dry_run=dry_run, progress_callback=progress_callback)
         if pathway_name == "ATA_ERASE":

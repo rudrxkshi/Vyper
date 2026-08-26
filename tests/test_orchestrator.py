@@ -6,13 +6,10 @@ import pytest
 
 from agent.agent import VYPERAgent
 from agent.common import JobState, SanitizationStatus
-<<<<<<< HEAD
 from agent.credentials import AgentCredentialStore
-=======
 from agent.pathways.ata_erase import ATAErasePathway
 from agent.pathways.hdd_overwrite import HDDOverwritePathway
 from agent.pathways.nvme_sanitize import NVMeSanitizePathway
->>>>>>> f92af61deccff4855c25365623da795ea1595f4a
 from agent.policy import PolicyDecision
 from agent.profiler import DeviceProfile
 from agent.verifier import VerificationResult

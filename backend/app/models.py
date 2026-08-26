@@ -178,6 +178,9 @@ class AgentRecord(Base):
 	revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 	metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 	token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+	public_key_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
+	public_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+	identity_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class EnrollmentTokenRecord(Base):
@@ -241,6 +244,21 @@ class CentralJobRecord(Base):
 	result_idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 	nonce: Mapped[str] = mapped_column(String(64), nullable=False)
 	integrity_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+	command_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class SecurityEventRecord(Base):
+	__tablename__ = "security_events"
+
+	id: Mapped[str] = mapped_column(String(36), primary_key=True)
+	event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+	severity: Mapped[str] = mapped_column(String(32), nullable=False, default="INFO")
+	actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+	resource: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+	agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+	central_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+	metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class CentralJobEventRecord(Base):

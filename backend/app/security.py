@@ -15,7 +15,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import AuditLogRecord
+from .models import AuditLogRecord, SecurityEventRecord
 
 SECRET_MARKERS = ("password", "secret", "token", "credential", "passphrase", "ata_password", "authorization")
 _DEV_MFA_KEY = secrets.token_bytes(32)
@@ -140,6 +140,26 @@ def record_audit_event(
 		request_json=safe_metadata, response_json={}, request_id=request_id,
 		previous_hash=previous_hash, event_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
 		created_at=event_time,
+	)
+	db.add(record)
+	return record
+
+
+def record_security_event(
+	db: Session, *, event_type: str, severity: str = "INFO", actor: str | None = None,
+	resource: str | None = None, agent_id: str | None = None, central_job_id: str | None = None,
+	metadata: dict[str, Any] | None = None,
+) -> SecurityEventRecord:
+	record = SecurityEventRecord(
+		id=str(uuid4()),
+		event_type=event_type,
+		severity=severity,
+		actor=actor,
+		resource=resource,
+		agent_id=agent_id,
+		central_job_id=central_job_id,
+		metadata_json=redact(metadata or {}),
+		created_at=datetime.now(timezone.utc),
 	)
 	db.add(record)
 	return record
