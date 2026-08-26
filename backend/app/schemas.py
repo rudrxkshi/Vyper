@@ -254,6 +254,12 @@ class CentralJobCreate(BaseModel):
     policy_id: str | None = None
 
 
+class CentralJobApprovalDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: str = Field(default="APPROVED", pattern=r"^(APPROVED|REJECTED)$")
+
+
 class OrganizationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=255)

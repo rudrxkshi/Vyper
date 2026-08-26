@@ -34,6 +34,7 @@ from ..schemas import (
 	AgentHeartbeat,
 	AgentJobEventUpload,
 	AgentJobResultUpload,
+	CentralJobApprovalDecision,
 	CentralJobCreate,
 	EnrollmentTokenCreate,
 	EnrollmentTokenRead,
@@ -120,6 +121,7 @@ def _job_dict(job: CentralJobRecord, db: Session) -> dict[str, Any]:
 	approvals = db.execute(select(CentralJobApprovalRecord).where(
 		CentralJobApprovalRecord.central_job_id == job.central_job_id,
 	).order_by(CentralJobApprovalRecord.created_at)).scalars().all()
+	approved_count = sum(approval.decision == "APPROVED" for approval in approvals)
 	return {
 		"central_job_id": job.central_job_id,
 		"agent_id": job.agent_id,
@@ -150,7 +152,7 @@ def _job_dict(job: CentralJobRecord, db: Session) -> dict[str, Any]:
 		"organization_id": job.organization_id,
 		"policy_id": job.policy_id,
 		"required_approvals": job.required_approvals,
-		"approval_count": len(approvals),
+		"approval_count": approved_count,
 		"approvals": [{"id": item.id, "approver": item.approver, "decision": item.decision, "created_at": _iso(item.created_at)} for item in approvals],
 		"events": [
 			{
@@ -253,15 +255,27 @@ def add_organization_member(organization_id: str, payload: OrganizationMembershi
 	require_organization_manager(db, principal, organization_id)
 	if db.get(UserRecord, payload.user_id) is None:
 		raise HTTPException(status_code=404, detail="User not found.")
-	membership = OrganizationMembershipRecord(id=str(uuid4()), organization_id=organization_id, user_id=payload.user_id, role=payload.role)
-	db.add(membership)
-	record_audit_event(db, actor=principal.audit_identity, action="ORGANIZATION_MEMBER_ADDED", resource=f"organization:{organization_id}", metadata={"user_id": payload.user_id, "role": payload.role}, organization_id=organization_id)
+	membership = db.execute(select(OrganizationMembershipRecord).where(
+		OrganizationMembershipRecord.organization_id == organization_id,
+		OrganizationMembershipRecord.user_id == payload.user_id,
+	)).scalar_one_or_none()
+	if membership is not None:
+		if membership.disabled_at is None:
+			raise HTTPException(status_code=409, detail="User is already a member of this organization.")
+		membership.role = payload.role
+		membership.disabled_at = None
+		action = "ORGANIZATION_MEMBER_REACTIVATED"
+	else:
+		membership = OrganizationMembershipRecord(id=str(uuid4()), organization_id=organization_id, user_id=payload.user_id, role=payload.role)
+		db.add(membership)
+		action = "ORGANIZATION_MEMBER_ADDED"
+	record_audit_event(db, actor=principal.audit_identity, action=action, resource=f"organization:{organization_id}", metadata={"user_id": payload.user_id, "role": payload.role}, organization_id=organization_id)
 	try:
 		db.commit()
 	except IntegrityError as exc:
 		db.rollback()
 		raise HTTPException(status_code=409, detail="User is already a member of this organization.") from exc
-	return {"id": membership.id, "organization_id": membership.organization_id, "user_id": membership.user_id, "role": membership.role, "created_at": _iso(membership.created_at)}
+	return {"id": membership.id, "organization_id": membership.organization_id, "user_id": membership.user_id, "role": membership.role, "disabled_at": _iso(membership.disabled_at), "created_at": _iso(membership.created_at)}
 
 
 @router.delete("/organizations/{organization_id}/members/{user_id}", status_code=204)
@@ -274,15 +288,16 @@ def remove_organization_member(organization_id: str, user_id: str,
 		OrganizationMembershipRecord.organization_id == organization_id,
 		OrganizationMembershipRecord.user_id == user_id,
 	)).scalar_one_or_none()
-	if membership is None:
+	if membership is None or membership.disabled_at is not None:
 		raise HTTPException(status_code=404, detail="Organization membership not found.")
 	if membership.role == "OWNER" and (db.scalar(select(func.count()).select_from(OrganizationMembershipRecord).where(
 		OrganizationMembershipRecord.organization_id == organization_id,
 		OrganizationMembershipRecord.role == "OWNER",
+		OrganizationMembershipRecord.disabled_at.is_(None),
 	)) or 0) <= 1:
 		raise HTTPException(status_code=409, detail="An organization must retain at least one owner.")
-	record_audit_event(db, actor=principal.audit_identity, action="ORGANIZATION_MEMBER_REMOVED", resource=f"organization:{organization_id}", metadata={"user_id": user_id}, organization_id=organization_id)
-	db.delete(membership)
+	membership.disabled_at = utc_now()
+	record_audit_event(db, actor=principal.audit_identity, action="ORGANIZATION_MEMBER_DISABLED", resource=f"organization:{organization_id}", metadata={"user_id": user_id}, organization_id=organization_id)
 	db.commit()
 
 
@@ -296,17 +311,18 @@ def update_organization_member(organization_id: str, user_id: str, payload: Orga
 		OrganizationMembershipRecord.organization_id == organization_id,
 		OrganizationMembershipRecord.user_id == user_id,
 	)).scalar_one_or_none()
-	if membership is None:
+	if membership is None or membership.disabled_at is not None:
 		raise HTTPException(status_code=404, detail="Organization membership not found.")
 	if membership.role == "OWNER" and payload.role == "MEMBER" and (db.scalar(select(func.count()).select_from(OrganizationMembershipRecord).where(
 		OrganizationMembershipRecord.organization_id == organization_id,
 		OrganizationMembershipRecord.role == "OWNER",
+		OrganizationMembershipRecord.disabled_at.is_(None),
 	)) or 0) <= 1:
 		raise HTTPException(status_code=409, detail="An organization must retain at least one owner.")
 	membership.role = payload.role
 	record_audit_event(db, actor=principal.audit_identity, action="ORGANIZATION_MEMBER_UPDATED", resource=f"organization:{organization_id}", metadata={"user_id": user_id, "role": payload.role}, organization_id=organization_id)
 	db.commit()
-	return {"id": membership.id, "organization_id": membership.organization_id, "user_id": membership.user_id, "role": membership.role, "created_at": _iso(membership.created_at)}
+	return {"id": membership.id, "organization_id": membership.organization_id, "user_id": membership.user_id, "role": membership.role, "disabled_at": _iso(membership.disabled_at), "created_at": _iso(membership.created_at)}
 
 
 @router.get("/organizations/{organization_id}/members", dependencies=[Depends(_OPERATOR_READ)])
@@ -314,7 +330,7 @@ def list_organization_members(organization_id: str, principal: OperatorPrincipal
 	if db.get(OrganizationRecord, organization_id) is None:
 		raise HTTPException(status_code=404, detail="Organization not found.")
 	require_organization_access(db, principal, organization_id)
-	return [{"id": item.id, "organization_id": item.organization_id, "user_id": item.user_id, "role": item.role, "created_at": _iso(item.created_at)} for item in db.execute(
+	return [{"id": item.id, "organization_id": item.organization_id, "user_id": item.user_id, "role": item.role, "disabled_at": _iso(item.disabled_at), "created_at": _iso(item.created_at)} for item in db.execute(
 		select(OrganizationMembershipRecord).where(OrganizationMembershipRecord.organization_id == organization_id).order_by(OrganizationMembershipRecord.created_at)
 	).scalars()]
 
@@ -608,30 +624,74 @@ def create_central_job(agent_id: str, payload: CentralJobCreate, principal: Oper
 
 
 @router.post("/central-jobs/{central_job_id}/approvals")
-def approve_central_job(central_job_id: str, principal: OperatorPrincipal = Depends(_SECURITY_APPROVER), db: Session = Depends(get_db)):
+def approve_central_job(central_job_id: str, payload: CentralJobApprovalDecision | None = None,
+	principal: OperatorPrincipal = Depends(_SECURITY_APPROVER), db: Session = Depends(get_db)):
 	job = db.get(CentralJobRecord, central_job_id)
 	if job is None:
 		raise HTTPException(status_code=404, detail="Central job not found.")
 	require_organization_access(db, principal, job.organization_id)
+	if job.expires_at <= utc_now():
+		job.status = "EXPIRED"
+		job.final_status = "EXPIRED"
+		job.updated_at = utc_now()
+		record_audit_event(db, actor="system", action="CENTRAL_JOB_EXPIRED", resource=f"central-job:{job.central_job_id}", metadata={"reason": "approval_expired"}, organization_id=job.organization_id)
+		record_security_event(db, event_type="CENTRAL_JOB_EXPIRED", severity="WARNING", actor="system", resource=f"central-job:{job.central_job_id}", central_job_id=job.central_job_id, metadata={"reason": "approval_expired"}, organization_id=job.organization_id)
+		db.commit()
+		raise HTTPException(status_code=409, detail="Central job approval window has expired.")
 	if job.status != "AWAITING_APPROVAL":
 		raise HTTPException(status_code=409, detail="Central job is not awaiting approval.")
 	if not principal.development_identity and principal.mfa_assurance not in {"TOTP", "RECOVERY"}:
 		raise HTTPException(status_code=403, detail="An MFA-authenticated security administrator is required to approve sanitization.")
 	if principal.user_id and principal.user_id == job.requested_by_user_id:
 		raise HTTPException(status_code=403, detail="The requester cannot approve this sanitization request.")
+	decision = payload.decision if payload is not None else "APPROVED"
 	approval = CentralJobApprovalRecord(id=str(uuid4()), central_job_id=job.central_job_id, approver_user_id=principal.user_id,
-		approver=principal.audit_identity, decision="APPROVED", created_at=utc_now())
+		approver=principal.audit_identity, decision=decision, created_at=utc_now())
 	db.add(approval)
 	try:
 		db.flush()
 	except IntegrityError as exc:
 		db.rollback()
 		raise HTTPException(status_code=409, detail="This approver has already acted on the central job.") from exc
-	count = db.scalar(select(func.count()).select_from(CentralJobApprovalRecord).where(CentralJobApprovalRecord.central_job_id == job.central_job_id)) or 0
-	if count >= job.required_approvals:
-		job.status = "QUEUED"; job.updated_at = utc_now()
+	if decision == "REJECTED":
+		job.status = "REJECTED"
+		job.final_status = "REJECTED"
+		job.error_json = {"code": "REJECTED", "message": "A security administrator rejected this sanitization request."}
+		job.updated_at = utc_now()
+		count = db.scalar(select(func.count()).select_from(CentralJobApprovalRecord).where(
+			CentralJobApprovalRecord.central_job_id == job.central_job_id,
+			CentralJobApprovalRecord.decision == "APPROVED",
+		)) or 0
+	else:
+		count = db.scalar(select(func.count()).select_from(CentralJobApprovalRecord).where(
+			CentralJobApprovalRecord.central_job_id == job.central_job_id,
+			CentralJobApprovalRecord.decision == "APPROVED",
+		)) or 0
+		if count >= job.required_approvals:
+			job.status = "QUEUED"; job.updated_at = utc_now()
 	job.authorization_json = {**(job.authorization_json or {}), "approval_count": count, "required_approvals": job.required_approvals}
-	record_audit_event(db, actor=principal.audit_identity, action="WIPE_APPROVED", resource=f"central-job:{job.central_job_id}", metadata={"approval_count": count, "required_approvals": job.required_approvals}, organization_id=job.organization_id)
+	record_audit_event(db, actor=principal.audit_identity, action="WIPE_APPROVED" if decision == "APPROVED" else "WIPE_REJECTED", resource=f"central-job:{job.central_job_id}", metadata={"approval_count": count, "required_approvals": job.required_approvals}, organization_id=job.organization_id)
+	if decision == "REJECTED":
+		record_security_event(db, event_type="CENTRAL_JOB_REJECTED", severity="WARNING", actor=principal.audit_identity, resource=f"central-job:{job.central_job_id}", central_job_id=job.central_job_id, metadata={"approval_count": count}, organization_id=job.organization_id)
+	db.commit()
+	return _job_dict(job, db)
+
+
+@router.post("/central-jobs/{central_job_id}/cancel")
+def cancel_central_job(central_job_id: str, principal: OperatorPrincipal = Depends(_OPERATOR_WRITE), db: Session = Depends(get_db)):
+	job = db.get(CentralJobRecord, central_job_id)
+	if job is None:
+		raise HTTPException(status_code=404, detail="Central job not found.")
+	require_organization_access(db, principal, job.organization_id)
+	if principal.user_id != job.requested_by_user_id and principal.role not in {OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN}:
+		raise HTTPException(status_code=403, detail="Only the requester or an administrator can cancel this central job.")
+	if job.status not in {"AWAITING_APPROVAL", "QUEUED"}:
+		raise HTTPException(status_code=409, detail="Only unclaimed central jobs can be cancelled.")
+	job.status = "CANCELLED"
+	job.final_status = "CANCELLED"
+	job.updated_at = utc_now()
+	record_audit_event(db, actor=principal.audit_identity, action="CENTRAL_JOB_CANCELLED", resource=f"central-job:{job.central_job_id}", metadata={}, organization_id=job.organization_id)
+	record_security_event(db, event_type="CENTRAL_JOB_CANCELLED", severity="INFO", actor=principal.audit_identity, resource=f"central-job:{job.central_job_id}", central_job_id=job.central_job_id, metadata={}, organization_id=job.organization_id)
 	db.commit()
 	return _job_dict(job, db)
 
@@ -649,11 +709,14 @@ def list_central_jobs(principal: OperatorPrincipal = Depends(_OPERATOR_READ), db
 def claim_next_job(response: Response, agent: AgentRecord = Depends(authenticated_agent), db: Session = Depends(get_db)):
 	now = utc_now()
 	expired = db.execute(select(CentralJobRecord).where(
-		CentralJobRecord.agent_id == agent.agent_id, CentralJobRecord.status == "QUEUED", CentralJobRecord.expires_at <= now,
+		CentralJobRecord.agent_id == agent.agent_id, CentralJobRecord.status.in_(("AWAITING_APPROVAL", "QUEUED")), CentralJobRecord.expires_at <= now,
 	)).scalars().all()
 	for job in expired:
 		job.status = "EXPIRED"
+		job.final_status = "EXPIRED"
 		job.updated_at = now
+		record_audit_event(db, actor="system", action="CENTRAL_JOB_EXPIRED", resource=f"central-job:{job.central_job_id}", metadata={"reason": "claim_window_expired"}, organization_id=job.organization_id)
+		record_security_event(db, event_type="CENTRAL_JOB_EXPIRED", severity="WARNING", actor="system", resource=f"central-job:{job.central_job_id}", central_job_id=job.central_job_id, metadata={"reason": "claim_window_expired"}, organization_id=job.organization_id)
 	job = db.execute(select(CentralJobRecord).where(
 		CentralJobRecord.agent_id == agent.agent_id, CentralJobRecord.status == "QUEUED", CentralJobRecord.expires_at > now,
 	).order_by(CentralJobRecord.created_at)).scalars().first()

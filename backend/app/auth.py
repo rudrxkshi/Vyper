@@ -118,6 +118,7 @@ def organization_ids(db: Session, principal: OperatorPrincipal) -> set[str] | No
 		return set()
 	return set(db.execute(select(OrganizationMembershipRecord.organization_id).where(
 		OrganizationMembershipRecord.user_id == principal.user_id,
+		OrganizationMembershipRecord.disabled_at.is_(None),
 	)).scalars())
 
 
@@ -146,5 +147,6 @@ def require_organization_manager(db: Session, principal: OperatorPrincipal, orga
 	if principal.user_id is None or db.scalar(select(OrganizationMembershipRecord.role).where(
 		OrganizationMembershipRecord.organization_id == organization_id,
 		OrganizationMembershipRecord.user_id == principal.user_id,
+		OrganizationMembershipRecord.disabled_at.is_(None),
 	)) != "OWNER":
 		raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization ownership is required to manage membership.")
