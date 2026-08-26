@@ -36,6 +36,7 @@ import {
   shouldPollLocalJob,
 } from "../lib/presentation.mjs";
 import { loadLocalConsoleData } from "../lib/local-console-data.mjs";
+import { releaseDownloadUrl, selectLinuxX64Release } from "../lib/downloads.mjs";
 
 test("central job detail associates null-job-id audits by central resource while preserving legacy lookup", () => {
   const audits = [
@@ -597,6 +598,27 @@ test("download metadata is loaded from the central release endpoint", async () =
   assert.deepEqual(await client.listDownloads(), fixture);
   assert.equal(requestedUrl, "https://central.example/downloads");
   assert.equal(fixture.some((item) => item.platform === "windows"), false);
+});
+
+test("dashboard downloads use the central Linux artifact contract without leaving the shell", () => {
+  const releases = [
+    { platform: "windows", architecture: "x86_64", download_url: "/downloads/windows.zip" },
+    { platform: "linux", architecture: "x86_64", download_url: "/downloads/vyper.tar.gz", sha256: "b".repeat(64) },
+  ];
+  const release = selectLinuxX64Release(releases);
+  assert.equal(release, releases[1]);
+  assert.equal(releaseDownloadUrl("https://central.example", release), "https://central.example/downloads/vyper.tar.gz");
+
+  const dashboardSource = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  assert.match(dashboardSource, /id: "downloads", label: "Downloads"/);
+  assert.doesNotMatch(dashboardSource, /label: "Downloads"[^\n]*href:/);
+  assert.match(dashboardSource, /screen === "downloads" && !localMode && dashboardAccessReady/);
+  assert.match(dashboardSource, /apiClient\.listDownloads\(\)/);
+  assert.match(dashboardSource, /<DownloadsContent apiBase=\{apiUrl\}/);
+
+  const directPageSource = readFileSync(new URL("../app/download/page.js", import.meta.url), "utf8");
+  assert.match(directPageSource, /client\.listDownloads\(\)/);
+  assert.match(directPageSource, /<DownloadsContent/);
 });
 
 test("FastAPI validation details retain HTTP status and safe field messages", () => {

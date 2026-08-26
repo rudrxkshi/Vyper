@@ -298,7 +298,14 @@ def test_download_metadata_and_file_are_backed_by_generated_manifest(monkeypatch
 
 
 def test_download_page_has_one_real_linux_download_and_unavailable_platforms():
-	source = (ROOT / "frontend/user-dashboard/app/download/page.js").read_text(encoding="utf-8")
+	source = "\n".join(
+		(ROOT / path).read_text(encoding="utf-8")
+		for path in (
+			"frontend/user-dashboard/app/download/page.js",
+			"frontend/user-dashboard/app/downloads-content.js",
+			"frontend/user-dashboard/lib/downloads.mjs",
+		)
+	)
 	assert "release.download_url" in source
 	assert "Linux x86_64" in source
 	assert "Windows — Coming soon (unavailable)" in source

@@ -1,6 +1,5 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
   LayoutGrid, HardDrive, ListChecks, FileCheck2, ScrollText, Settings as SettingsIcon,
   ChevronDown, ShieldCheck, Lock, Search, X, Check, TriangleAlert, CircleDot, Users,
@@ -40,6 +39,8 @@ import {
   shouldPollLocalJob,
 } from "../lib/presentation.mjs";
 import { loadLocalConsoleData } from "../lib/local-console-data.mjs";
+import { selectLinuxX64Release } from "../lib/downloads.mjs";
+import DownloadsContent from "./downloads-content";
 
 const PRODUCT_VERSION = "1.0.0-rc1";
 const STAGES = ["Profiling", "Policy", "Execution", "Verification", "Evidence", "Certificate"];
@@ -126,6 +127,8 @@ export default function VyperDashboard() {
   const [organizations, setOrganizations] = useState([]);
   const [remotePolicies, setRemotePolicies] = useState([]);
   const [securityEvents, setSecurityEvents] = useState([]);
+  const [downloadRelease, setDownloadRelease] = useState(null);
+  const [downloadError, setDownloadError] = useState("");
   const [remoteRequests, setRemoteRequests] = useState([]);
   const [syncStatus, setSyncStatus] = useState(null);
   const [remoteApprovalPassword, setRemoteApprovalPassword] = useState("");
@@ -334,8 +337,25 @@ export default function VyperDashboard() {
     return () => window.clearInterval(pollId);
   }, [jobs, loadJobDetail, localMode, screen, selectedJobId]);
 
+  useEffect(() => {
+    if (localMode || screen !== "downloads" || !operatorUser || mfaRequired) return undefined;
+    let cancelled = false;
+    apiClient.listDownloads()
+      .then((items) => {
+        if (!cancelled) {
+          setDownloadError("");
+          setDownloadRelease(selectLinuxX64Release(items));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setDownloadError(formatApiError(error));
+      });
+    return () => { cancelled = true; };
+  }, [apiClient, localMode, mfaRequired, operatorUser, screen]);
+
   function goto(screenId, opts) {
     setScreen(screenId);
+    if (screenId === "downloads") setDownloadError("");
 
     if (opts?.jobId) {
       setSelectedJobId(opts.jobId);
@@ -557,7 +577,7 @@ export default function VyperDashboard() {
     ...(!localMode ? [{ id: "policies", label: "Policies", icon: BookOpenCheck }] : []),
     ...(!localMode ? [{ id: "security-events", label: "Security events", icon: ShieldAlert }] : []),
     ...(localMode ? [{ id: "remote-requests", label: "Remote requests", icon: ShieldCheck }] : []),
-    ...(!localMode ? [{ id: "download", label: "Download", icon: DownloadIcon, href: "/download/" }] : []),
+    ...(!localMode ? [{ id: "downloads", label: "Downloads", icon: DownloadIcon }] : []),
     { id: "assets", label: "Assets", icon: HardDrive },
     { id: "jobs", label: "Jobs", icon: ListChecks },
     { id: "certificates", label: "Certificates", icon: FileCheck2 },
@@ -730,14 +750,6 @@ export default function VyperDashboard() {
           <nav className="nb-nav">
             {NAV.map((n) => {
               const Icon = n.icon;
-              if (n.href) {
-                return (
-                  <Link key={n.id} className="nb-nav-item" href={n.href}>
-                    <Icon size={16} aria-hidden="true" />
-                    {n.label}
-                  </Link>
-                );
-              }
               return (
                 <button key={n.id} className={"nb-nav-item" + (screen === n.id ? " active" : "")} onClick={() => goto(n.id)}>
                   <Icon size={16} aria-hidden="true" />
@@ -937,6 +949,9 @@ export default function VyperDashboard() {
                 </table>
               </div>
             </>
+          )}
+          {screen === "downloads" && !localMode && dashboardAccessReady && (
+            <DownloadsContent apiBase={apiUrl} error={downloadError} release={downloadRelease} dashboard />
           )}
           {screen === "remote-requests" && localMode && dashboardAccessReady && (
             <>
