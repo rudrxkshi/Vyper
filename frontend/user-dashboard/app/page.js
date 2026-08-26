@@ -39,6 +39,7 @@ import {
   remoteAssetsForJob,
   shouldPollLocalJob,
 } from "../lib/presentation.mjs";
+import { loadLocalConsoleData } from "../lib/local-console-data.mjs";
 
 const PRODUCT_VERSION = "1.0.0-rc1";
 const STAGES = ["Profiling", "Policy", "Execution", "Verification", "Evidence", "Certificate"];
@@ -197,25 +198,18 @@ export default function VyperDashboard() {
     try {
       let assetsData;
       if (localMode) {
-        const [devicesData, localJobsData, localCertificatesData, localAuditData, remoteRequestsData, syncStatusData] = await Promise.all([
-          apiClient.listDevices(),
-          apiClient.listJobs(),
-          apiClient.listCertificates(),
-          apiClient.listAuditLogs(),
-          apiClient.listRemoteJobs(),
-          apiClient.getSyncStatus(),
-        ]);
-        assetsData = normalizeDiscoveredDevices(devicesData);
-        setRemoteRequests(remoteRequestsData);
-        setSyncStatus(syncStatusData);
-        setCerts(localCertificatesData);
+        const localData = await loadLocalConsoleData(apiClient);
+        assetsData = normalizeDiscoveredDevices(localData.devices);
+        setRemoteRequests(localData.remoteRequests);
+        setSyncStatus(localData.syncStatus);
+        setCerts(localData.certificates);
         setSelectedCertId((current) =>
-          localCertificatesData.some((certificate) => certificate.id === current)
+          localData.certificates.some((certificate) => certificate.id === current)
             ? current
-            : localCertificatesData[0]?.id || null,
+            : localData.certificates[0]?.id || null,
         );
-        setAuditLogs(localAuditData);
-        const normalizedJobs = localJobsData.map(normalizeLocalJob);
+        setAuditLogs(localData.auditLogs);
+        const normalizedJobs = localData.jobs.map(normalizeLocalJob);
         setJobs(normalizedJobs);
         setSelectedJobId((current) =>
           normalizedJobs.some((job) => job.id === current) ? current : normalizedJobs[0]?.id || null,

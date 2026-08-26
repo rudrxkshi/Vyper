@@ -21,6 +21,7 @@ from vyper_version import __version__
 
 ARTIFACT_NAME = f"vyper-local-console-linux-x86_64-{__version__}.tar.gz"
 PRODUCT = "VYPER Local Console"
+LOCAL_FRONTEND_API = "http://127.0.0.1:8765"
 
 
 def sha256_file(path: Path) -> str:
@@ -69,6 +70,24 @@ def _write_deterministic_tar(source: Path, destination: Path) -> None:
 						archive.addfile(info)
 
 
+def verify_local_frontend_export(export_root: Path) -> Path:
+	index = export_root / "index.html"
+	javascript = list((export_root / "_next" / "static").rglob("*.js"))
+	if not index.is_file() or not javascript:
+		raise RuntimeError("Local console static export is incomplete.")
+	bundle = "\n".join(path.read_text(encoding="utf-8") for path in javascript)
+	missing = [marker for marker in (LOCAL_FRONTEND_API, "/certificates", "/audit-logs") if marker not in bundle]
+	if missing:
+		raise RuntimeError(f"Local console static export is missing required integration markers: {', '.join(missing)}")
+	metadata = export_root / "vyper-local-build.json"
+	metadata.write_text(json.dumps({
+		"dashboard_mode": "local",
+		"local_agent_api_base_url": LOCAL_FRONTEND_API,
+		"required_collections": ["/certificates", "/audit-logs"],
+	}, indent=2) + "\n", encoding="utf-8")
+	return metadata
+
+
 def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_build: bool = False) -> Path:
 	output_dir.mkdir(parents=True, exist_ok=True)
 	from local_agent.sbom import generate_sbom
@@ -79,12 +98,13 @@ def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_
 		environment = os.environ.copy()
 		environment.update({
 			"NEXT_PUBLIC_VYPER_MODE": "local",
-			"NEXT_PUBLIC_VYPER_LOCAL_AGENT_API_BASE_URL": "http://127.0.0.1:8765",
+			"NEXT_PUBLIC_VYPER_LOCAL_AGENT_API_BASE_URL": LOCAL_FRONTEND_API,
 		})
 		npm_command = shutil.which("npm") or shutil.which("npm.cmd")
 		if npm_command is None:
 			raise RuntimeError("npm is required to build the local console static export.")
 		subprocess.run([npm_command, "run", "build"], cwd=frontend, env=environment, check=True)
+	verify_local_frontend_export(frontend / "out")
 
 	temp = output_dir / ".vyper-staging"
 	temp.mkdir(parents=True, exist_ok=True)

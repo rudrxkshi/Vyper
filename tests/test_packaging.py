@@ -36,6 +36,13 @@ def _load_installer():
 	return module
 
 
+def _load_build_release():
+	spec = importlib.util.spec_from_file_location("vyper_build_release", ROOT / "packaging" / "build_release.py")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
 def _package_fixture(tmp_path: Path, version: str = "1.0.0-rc1", name: str = "package") -> Path:
 	package = tmp_path / name
 	(package / "payload" / "ui").mkdir(parents=True)
@@ -296,6 +303,24 @@ def test_artifact_excludes_forbidden_development_and_secret_files():
 		parts = set(Path(member.name).parts)
 		assert not (parts & forbidden_parts)
 		assert not member.name.endswith((".db", ".pyc", ".map"))
+
+
+def test_local_static_export_gate_requires_collection_endpoints_and_records_build_mode(tmp_path):
+	export = tmp_path / "out"
+	chunks = export / "_next" / "static" / "chunks"
+	chunks.mkdir(parents=True)
+	(export / "index.html").write_text("<html>VYPER</html>", encoding="utf-8")
+	(chunks / "app.js").write_text(
+		'const api="http://127.0.0.1:8765"; fetch(api+"/certificates"); fetch(api+"/audit-logs");',
+		encoding="utf-8",
+	)
+	metadata = _load_build_release().verify_local_frontend_export(export)
+	payload = json.loads(metadata.read_text(encoding="utf-8"))
+	assert payload == {
+		"dashboard_mode": "local",
+		"local_agent_api_base_url": "http://127.0.0.1:8765",
+		"required_collections": ["/certificates", "/audit-logs"],
+	}
 
 
 def test_runtime_sqlite_artifacts_are_ignored_and_not_tracked():

@@ -34,6 +34,7 @@ import {
   normalizeRemoteAgent,
   shouldPollLocalJob,
 } from "../lib/presentation.mjs";
+import { loadLocalConsoleData } from "../lib/local-console-data.mjs";
 
 test("central job detail associates null-job-id audits by central resource while preserving legacy lookup", () => {
   const audits = [
@@ -374,6 +375,33 @@ test("local console reads certificate and lifecycle projections from local endpo
     "http://127.0.0.1:8765/certificates",
     "http://127.0.0.1:8765/audit-logs",
   ]);
+});
+
+test("populated local certificate and audit arrays survive the dashboard loading boundary", async () => {
+  const certificate = { id: "local:job-1:cert-1", certificate_id: "cert-1", local_job_id: "job-1" };
+  const audit = { id: "local:job-1:1", local_job_id: "job-1", sequence: 1, action: "LOCAL_JOB_PENDING" };
+  const localData = await loadLocalConsoleData({
+    listDevices: async () => [],
+    listJobs: async () => [],
+    listCertificates: async () => [certificate],
+    listAuditLogs: async () => [audit],
+    listRemoteJobs: async () => [],
+    getSyncStatus: async () => ({ configured: false }),
+  });
+
+  assert.deepEqual(localData.certificates, [certificate]);
+  assert.deepEqual(localData.auditLogs, [audit]);
+});
+
+test("local collection loader rejects central-style wrapper objects", async () => {
+  await assert.rejects(() => loadLocalConsoleData({
+    listDevices: async () => [],
+    listJobs: async () => [],
+    listCertificates: async () => ({ items: [] }),
+    listAuditLogs: async () => [],
+    listRemoteJobs: async () => [],
+    getSyncStatus: async () => ({}),
+  }), /certificates response must be a JSON array/i);
 });
 
 test("central remote jobs use an agent-owned synchronized asset contract", async () => {
