@@ -4,7 +4,7 @@ import Link from "next/link";
 import {
   LayoutGrid, HardDrive, ListChecks, FileCheck2, ScrollText, Settings as SettingsIcon,
   ChevronDown, ShieldCheck, Lock, Search, X, Check, TriangleAlert, CircleDot, Users,
-  Download as DownloadIcon,
+  Download as DownloadIcon, ShieldAlert, BookOpenCheck,
 } from "lucide-react";
 import {
   checkBackendConnection,
@@ -44,6 +44,12 @@ import { loadLocalConsoleData } from "../lib/local-console-data.mjs";
 const PRODUCT_VERSION = "1.0.0-rc1";
 const STAGES = ["Profiling", "Policy", "Execution", "Verification", "Evidence", "Certificate"];
 const TERMINAL_JOB_STATES = new Set(["VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"]);
+
+function newDashboardIdempotencyKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const values = globalThis.crypto.getRandomValues(new Uint32Array(4));
+  return `dashboard-${Array.from(values, (value) => value.toString(16).padStart(8, "0")).join("")}`;
+}
 
 function Badge({ tone = "pend", children, stamp }) {
   return (
@@ -117,12 +123,15 @@ export default function VyperDashboard() {
   const [remoteAgents, setRemoteAgents] = useState([]);
   const [remoteAssets, setRemoteAssets] = useState([]);
   const [centralJobs, setCentralJobs] = useState([]);
+  const [organizations, setOrganizations] = useState([]);
+  const [remotePolicies, setRemotePolicies] = useState([]);
+  const [securityEvents, setSecurityEvents] = useState([]);
   const [remoteRequests, setRemoteRequests] = useState([]);
   const [syncStatus, setSyncStatus] = useState(null);
   const [remoteApprovalPassword, setRemoteApprovalPassword] = useState("");
   const [remoteApprovalError, setRemoteApprovalError] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState("");
-  const [remoteJobForm, setRemoteJobForm] = useState({ assetId: "", dryRun: true, authorized: false, executionMode: "normal_local" });
+  const [remoteJobForm, setRemoteJobForm] = useState({ assetId: "", policyId: "", dryRun: true, authorized: false, executionMode: "normal_local" });
   const [remoteJobError, setRemoteJobError] = useState("");
 
   const [loading, setLoading] = useState(true);
@@ -157,6 +166,8 @@ export default function VyperDashboard() {
   const [operatorUser, setOperatorUser] = useState(localMode ? { role: "LOCAL" } : undefined);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [loginError, setLoginError] = useState("");
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState("");
 
   const apiClient = useMemo(
     () => createApiClient({
@@ -181,7 +192,9 @@ export default function VyperDashboard() {
 
     if (!localMode) {
       try {
-        setOperatorUser(await apiClient.currentUser());
+        const currentUser = await apiClient.currentUser();
+        setOperatorUser(currentUser);
+        setMfaRequired(Boolean(currentUser.mfa_required));
       } catch (error) {
         if (error?.status === 401) {
           setOperatorUser(null);
@@ -215,14 +228,19 @@ export default function VyperDashboard() {
           normalizedJobs.some((job) => job.id === current) ? current : normalizedJobs[0]?.id || null,
         );
       } else {
-        const [persistedAssets, jobsData, certsData, auditData, agentsData, centralJobsData] = await Promise.all([
+        const [persistedAssets, jobsData, certsData, auditData, agentsData, centralJobsData, organizationsData, securityEventsData] = await Promise.all([
           apiClient.listAssets(),
           apiClient.listJobs(),
           apiClient.listCertificates(),
           apiClient.listAuditLogs(),
           apiClient.listAgents(),
           apiClient.listCentralJobs(),
+          apiClient.listOrganizations(),
+          apiClient.listSecurityEvents(),
         ]);
+        const policiesData = (await Promise.all(
+          organizationsData.map((organization) => apiClient.listPolicies(organization.id)),
+        )).flat();
         assetsData = persistedAssets;
         const normalizedCentralJobs = centralJobsData.map(normalizeCentralJob);
         const allJobs = [...jobsData, ...normalizedCentralJobs];
@@ -240,6 +258,9 @@ export default function VyperDashboard() {
         const normalizedAgents = agentsData.map(normalizeRemoteAgent);
         setRemoteAgents(normalizedAgents);
         setCentralJobs(normalizedCentralJobs);
+        setOrganizations(organizationsData);
+        setRemotePolicies(policiesData);
+        setSecurityEvents(securityEventsData);
         setSelectedAgentId((current) => current || normalizedAgents[0]?.agent_id || "");
       }
 
@@ -406,6 +427,12 @@ export default function VyperDashboard() {
   const filteredAuditLogs = filterAuditLogs(auditLogs, { actor: auditActor, action: auditAction });
   const selectableRemoteAssets = remoteAssetsForJob(remoteAssets, remoteJobForm);
   const selectedRemoteAssetIsSelectable = selectableRemoteAssets.some((asset) => asset.id === remoteJobForm.assetId);
+  const selectedRemoteAgent = remoteAgents.find((agent) => agent.agent_id === selectedAgentId) || null;
+  const selectedRemoteAsset = remoteAssets.find((asset) => asset.id === remoteJobForm.assetId) || null;
+  const selectableRemotePolicies = remotePolicies.filter((policy) =>
+    !policy.revoked_at && policy.organization_id === selectedRemoteAgent?.organization_id
+  );
+  const selectedRemotePolicy = selectableRemotePolicies.find((policy) => policy.id === remoteJobForm.policyId) || null;
   const counts = {
     total: assets.length,
     verified: jobs.filter((j) => getJobStateMeta(j.job_state).successful).length,
@@ -430,13 +457,30 @@ export default function VyperDashboard() {
         dry_run: remoteJobForm.dryRun,
         central_authorized: remoteJobForm.authorized,
         destructive_confirmation: remoteJobForm.dryRun ? null : "SANITIZE",
-        idempotency_key: globalThis.crypto?.randomUUID?.() || `dashboard-${Date.now()}`,
+        idempotency_key: newDashboardIdempotencyKey(),
         expires_in_seconds: 3600,
         execution_mode: remoteJobForm.executionMode,
+        policy_id: selectedRemotePolicy?.id || null,
       });
       await refreshDashboardData();
     } catch (error) {
       setRemoteJobError(formatApiError(error));
+    }
+  }
+
+  async function decideCentralJob(job, decision) {
+    const consequence = decision === "APPROVED"
+      ? `Approve destructive sanitization of ${job.requested_target}? This authorization cannot be treated as execution evidence and local approval is still required.`
+      : `Reject sanitization of ${job.requested_target}?`;
+    if (!window.confirm(consequence)) return;
+    setRemoteJobError("");
+    try {
+      await apiClient.decideCentralJob(job.central_job_id, decision);
+      await refreshDashboardData();
+    } catch (error) {
+      const message = formatApiError(error);
+      if (/MFA-authenticated/i.test(message)) setMfaRequired(true);
+      setRemoteJobError(message);
     }
   }
 
@@ -475,10 +519,27 @@ export default function VyperDashboard() {
     try {
       const user = await apiClient.login(loginForm.username, loginForm.password);
       setOperatorUser(user);
+      setMfaRequired(Boolean(user.mfa_required));
       setLoginForm({ username: "", password: "" });
-      await refreshDashboardData({ showLoading: true });
+      if (!user.mfa_required) await refreshDashboardData({ showLoading: true });
     } catch (error) {
       setLoginForm((current) => ({ ...current, password: "" }));
+      setLoginError(formatApiError(error));
+    }
+  }
+
+  async function submitMfa(event) {
+    event.preventDefault();
+    setLoginError("");
+    try {
+      await apiClient.verifyMfa(mfaCode);
+      const user = await apiClient.currentUser();
+      setOperatorUser(user);
+      setMfaRequired(false);
+      setMfaCode("");
+      await refreshDashboardData({ showLoading: true });
+    } catch (error) {
+      setMfaCode("");
       setLoginError(formatApiError(error));
     }
   }
@@ -486,11 +547,15 @@ export default function VyperDashboard() {
   async function logoutOperator() {
     await apiClient.logout();
     setOperatorUser(null);
+    setMfaRequired(false);
     setAssets([]); setJobs([]); setCerts([]); setAuditLogs([]); setRemoteAgents([]); setCentralJobs([]);
+    setOrganizations([]); setRemotePolicies([]); setSecurityEvents([]);
   }
   const NAV = [
     { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
     ...(!localMode ? [{ id: "agents", label: "Agents", icon: Users }] : []),
+    ...(!localMode ? [{ id: "policies", label: "Policies", icon: BookOpenCheck }] : []),
+    ...(!localMode ? [{ id: "security-events", label: "Security events", icon: ShieldAlert }] : []),
     ...(localMode ? [{ id: "remote-requests", label: "Remote requests", icon: ShieldCheck }] : []),
     ...(!localMode ? [{ id: "download", label: "Download", icon: DownloadIcon, href: "/download/" }] : []),
     { id: "assets", label: "Assets", icon: HardDrive },
@@ -499,6 +564,7 @@ export default function VyperDashboard() {
     { id: "auditlogs", label: "Audit logs", icon: ScrollText },
     { id: "settings", label: "Settings", icon: SettingsIcon },
   ];
+  const dashboardAccessReady = localMode || (operatorUser !== null && !mfaRequired);
   return (
     <div className="nb-root">
       <style>{`
@@ -689,7 +755,7 @@ export default function VyperDashboard() {
           </button> : null}
         </aside>
         <main className="nb-main">
-          {!localMode && operatorUser === null ? <form className="nb-card" onSubmit={submitLogin}>
+          {!localMode && operatorUser === null && !mfaRequired ? <form className="nb-card" onSubmit={submitLogin}>
             <div className="nb-crumbs">Authenticated access</div>
             <h1 className="nb-h1 nb-heading">Sign in to VYPER</h1>
             <p className="nb-sub">Use a central operator account. Session credentials remain in a Secure, HttpOnly cookie.</p>
@@ -698,9 +764,17 @@ export default function VyperDashboard() {
             {loginError ? <div className="nb-error">{loginError}</div> : null}
             <div className="nb-btn-row"><button className="nb-btn primary" type="submit">Sign in</button></div>
           </form> : null}
+          {!localMode && mfaRequired ? <form className="nb-card" onSubmit={submitMfa}>
+            <div className="nb-crumbs">Step-up authentication</div>
+            <h1 className="nb-h1 nb-heading">Verify multi-factor authentication</h1>
+            <p className="nb-sub">Enter a current authenticator or unused recovery code before performing security-sensitive central operations.</p>
+            <div className="nb-field"><label>MFA code</label><input type="password" autoComplete="one-time-code" required value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} /></div>
+            {loginError ? <div className="nb-error">{loginError}</div> : null}
+            <div className="nb-btn-row"><button className="nb-btn primary" type="submit">Verify MFA</button><button className="nb-btn" type="button" onClick={logoutOperator}>Sign out</button></div>
+          </form> : null}
           {loading && <div className="nb-callout" style={{ marginBottom: 16 }}>Loading VYPER data…</div>}
           {dataError && <div className="nb-error" style={{ marginBottom: 16 }}>{dataError}</div>}
-          {screen === "dashboard" && (
+          {screen === "dashboard" && dashboardAccessReady && (
             <>
               <div className="nb-crumbs">Dashboard</div>
               <h1 className="nb-h1 nb-heading">Overview</h1>
@@ -754,7 +828,7 @@ export default function VyperDashboard() {
               </div>
             </>
           )}
-          {screen === "agents" && !localMode && (
+          {screen === "agents" && !localMode && dashboardAccessReady && (
             <>
               <div className="nb-crumbs">Central / Agents</div>
               <h1 className="nb-h1 nb-heading">Remote agents</h1>
@@ -782,14 +856,24 @@ export default function VyperDashboard() {
                   <div className="nb-field"><label>Agent</label><select value={selectedAgentId} onChange={(event) => setSelectedAgentId(event.target.value)}>{remoteAgents.map((agent) => <option key={agent.agent_id} value={agent.agent_id}>{agent.display_name} — {agent.hostname}</option>)}</select></div>
                   <table>
                     <thead><tr><th>Agent</th><th>Path</th><th>Model</th><th>Serial</th><th>Size</th><th>Safety</th></tr></thead>
-                    <tbody>{remoteAssets.map((asset) => <tr key={asset.id}><td className="nb-mono">{asset.agent_id}</td><td className="nb-mono">{asset.device_path}</td><td>{asset.model || "Unknown"}</td><td>{asset.serial_number || "Unavailable"}</td><td>{formatBytes(asset.size_bytes)}</td><td>{asset.profile_json?.is_system_device ? <Badge tone="bad">System</Badge> : <Badge tone="ok">Observed</Badge>}</td></tr>)}</tbody>
+                    <tbody>{remoteAssets.map((asset) => {
+                      const profile = asset.profile_json || {};
+                      const safety = profile.is_system_device ? ["bad", "System"]
+                        : profile.mounted !== false ? ["warn", profile.mounted ? "Mounted" : "Mount unknown"]
+                          : profile.eligible_for_sanitization !== true ? ["bad", "Ineligible"] : ["ok", "Eligible"];
+                      return <tr key={asset.id}><td className="nb-mono">{asset.agent_id}</td><td className="nb-mono">{asset.device_path}</td><td>{asset.model || "Unknown"}</td><td>{asset.serial_number || "Unavailable"}</td><td>{formatBytes(asset.size_bytes)}</td><td><Badge tone={safety[0]}>{safety[1]}</Badge></td></tr>;
+                    })}</tbody>
                   </table>
                 </div>
                 <div className="nb-card">
                   <div className="nb-section-title">Create remote job</div>
                   <form onSubmit={submitRemoteJob}>
                     <div className="nb-field"><label>Synchronized asset</label><select value={selectedRemoteAssetIsSelectable ? remoteJobForm.assetId : ""} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, assetId: event.target.value })}><option value="" disabled>Choose an eligible asset</option>{selectableRemoteAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.device_path} — {asset.model || "Unknown"} — {asset.serial_number || "No serial"}</option>)}</select></div>
+                    <div className="nb-field"><label>Remote policy</label><select value={selectedRemotePolicy?.id || ""} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, policyId: event.target.value })}><option value="">Default authorization policy</option>{selectableRemotePolicies.map((policy) => <option key={policy.id} value={policy.id}>{policy.name} — {policy.required_approvals} approval(s)</option>)}</select></div>
                     <div className="nb-field"><label>Execution mode</label><select value={remoteJobForm.executionMode} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, executionMode: event.target.value })}><option value="normal_local">Normal local job</option><option value="boot_sanitize">System-disk temporary boot job</option></select></div>
+                    {selectedRemoteAgent && selectedRemoteAsset && <div className="nb-callout" style={{ marginBottom: 12 }}>
+                      <b>Authorization context.</b> Target <span className="nb-mono">{selectedRemoteAsset.device_path}</span>; identity <span className="nb-mono">{selectedRemoteAsset.hardware_identity}</span>; agent {selectedRemoteAgent.status}, last heartbeat {selectedRemoteAgent.last_seen_at || "never"}; policy {selectedRemotePolicy?.name || "default"}; eligibility {String(selectedRemoteAsset.profile_json?.eligible_for_sanitization)}; mounted {String(selectedRemoteAsset.profile_json?.mounted)}. Destructive execution is irreversible and still requires independent local approval.
+                    </div>}
                     {remoteJobForm.executionMode === "boot_sanitize" && <div className="nb-callout"><b>No-USB boot workflow.</b> The installed OS only prepares a one-shot boot. Sanitization requires fresh confirmation in the independent boot environment.</div>}
                     <div className="nb-check"><input type="checkbox" checked={remoteJobForm.dryRun} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, dryRun: event.target.checked })} /><div>Dry run. The agent may execute this automatically if locally configured.</div></div>
                     {!remoteJobForm.dryRun && <div className="nb-check" style={{ marginTop: 8 }}><input type="checkbox" checked={remoteJobForm.authorized} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, authorized: event.target.checked })} /><div><b>Central authorization.</b> This does not replace local operator approval.</div></div>}
@@ -801,16 +885,60 @@ export default function VyperDashboard() {
               <div className="nb-card">
                 <div className="nb-section-title">Remote job delivery and execution</div>
                 <table>
-                  <thead><tr><th>Central job</th><th>Agent</th><th>Target</th><th>Mode</th><th>Delivery</th><th>Local state</th><th>Final</th><th>Progress</th><th>Created</th><th>Started</th><th>Finished</th></tr></thead>
+                  <thead><tr><th>Central job</th><th>Agent</th><th>Target</th><th>Mode</th><th>Delivery</th><th>Approvals</th><th>Local state</th><th>Final</th><th>Progress</th><th>Created</th><th>Action</th></tr></thead>
                   <tbody>{centralJobs.map((job) => {
                     const progress = getProgressPresentation(job.progress);
-                    return <tr key={job.central_job_id}><td className="nb-mono">{job.central_job_id}</td><td className="nb-mono">{job.agent_id}</td><td className="nb-mono">{job.requested_target}</td><td>{job.execution_mode === "boot_sanitize" ? "SYSTEM-DISK BOOT" : "NORMAL LOCAL"}</td><td><Badge tone={job.waiting_local_approval ? "warn" : "acc"}>{job.waiting_local_approval ? "WAITING FOR LOCAL APPROVAL" : job.status}</Badge></td><td>{job.local_execution_state || "Not started"}</td><td><Badge tone={getFinalStatusMeta(job.final_status).tone}>{getFinalStatusMeta(job.final_status).label}</Badge></td><td>{job.progress ? progress.label : "—"}</td><td>{job.created_at}</td><td>{job.started_at || "—"}</td><td>{job.finished_at || "—"}</td></tr>;
+                    return <tr key={job.central_job_id}><td className="nb-mono">{job.central_job_id}</td><td className="nb-mono">{job.agent_id}</td><td className="nb-mono">{job.requested_target}</td><td>{job.execution_mode === "boot_sanitize" ? "SYSTEM-DISK BOOT" : "NORMAL LOCAL"}</td><td><Badge tone={job.waiting_local_approval || job.status === "AWAITING_APPROVAL" ? "warn" : "acc"}>{job.waiting_local_approval ? "WAITING FOR LOCAL APPROVAL" : job.status}</Badge></td><td>{job.approval_count || 0}/{job.required_approvals || 0}</td><td>{job.local_execution_state || "Not started"}</td><td><Badge tone={getFinalStatusMeta(job.final_status).tone}>{getFinalStatusMeta(job.final_status).label}</Badge></td><td>{job.progress ? progress.label : "—"}</td><td>{job.created_at}</td><td>{job.status === "AWAITING_APPROVAL" ? <div className="nb-btn-row"><button className="nb-btn small" onClick={() => decideCentralJob(job, "APPROVED")}>Approve</button><button className="nb-btn small" onClick={() => decideCentralJob(job, "REJECTED")}>Reject</button></div> : "—"}</td></tr>;
                   })}</tbody>
                 </table>
               </div>
             </>
           )}
-          {screen === "remote-requests" && localMode && (
+          {screen === "policies" && !localMode && dashboardAccessReady && (
+            <>
+              <div className="nb-crumbs">Central / Policies</div>
+              <h1 className="nb-h1 nb-heading">Remote sanitization policies</h1>
+              <p className="nb-sub">Organization-scoped policy versions and approval requirements. Revoked policies remain visible for audit but cannot be selected for new jobs.</p>
+              <div className="nb-card">
+                <table>
+                  <thead><tr><th>Organization</th><th>Policy</th><th>Version</th><th>Remote allowed</th><th>Approvals</th><th>System disk</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {remotePolicies.map((policy) => <tr key={policy.id}>
+                      <td>{organizations.find((organization) => organization.id === policy.organization_id)?.name || policy.organization_id}</td>
+                      <td className="strong">{policy.name}</td><td>{policy.version}</td>
+                      <td>{policy.remote_sanitization_allowed ? "Yes" : "No"}</td>
+                      <td>{policy.requires_approval ? policy.required_approvals : 0}</td>
+                      <td>{policy.allow_system_disk ? "Allowed through boot workflow" : "Blocked"}</td>
+                      <td><Badge tone={policy.revoked_at ? "bad" : "ok"}>{policy.revoked_at ? "REVOKED" : "ACTIVE"}</Badge></td>
+                    </tr>)}
+                    {remotePolicies.length === 0 && <tr><td colSpan={7}>No remote policies are visible in your organization scope.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {screen === "security-events" && !localMode && dashboardAccessReady && (
+            <>
+              <div className="nb-crumbs">Central / Security events</div>
+              <h1 className="nb-h1 nb-heading">Security events</h1>
+              <p className="nb-sub">Organization-scoped control-plane events. These records are distinct from local lifecycle history and the central audit hash chain.</p>
+              <div className="nb-card">
+                <table>
+                  <thead><tr><th>Severity</th><th>Event</th><th>Actor</th><th>Resource</th><th>Agent</th><th>Central job</th><th>Created</th><th>Metadata</th></tr></thead>
+                  <tbody>
+                    {securityEvents.map((event) => <tr key={event.id}>
+                      <td><Badge tone={event.severity === "CRITICAL" || event.severity === "ERROR" ? "bad" : event.severity === "WARNING" ? "warn" : "acc"}>{event.severity}</Badge></td>
+                      <td className="strong">{event.event_type}</td><td>{event.actor || "system"}</td>
+                      <td className="nb-mono">{event.resource || "—"}</td><td className="nb-mono">{event.agent_id || "—"}</td>
+                      <td className="nb-mono">{event.central_job_id || "—"}</td><td>{event.created_at}</td><td className="nb-mono">{JSON.stringify(event.metadata_json || {})}</td>
+                    </tr>)}
+                    {securityEvents.length === 0 && <tr><td colSpan={8}>No security events are visible in your organization scope.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {screen === "remote-requests" && localMode && dashboardAccessReady && (
             <>
               <div className="nb-crumbs">Local console / Remote requests</div>
               <h1 className="nb-h1 nb-heading">Remote sanitization requests</h1>
@@ -854,7 +982,7 @@ export default function VyperDashboard() {
               </div>
             </>
           )}
-          {screen === "assets" && (
+          {screen === "assets" && dashboardAccessReady && (
             <>
               <div className="nb-crumbs">Assets</div>
               <h1 className="nb-h1 nb-heading">Asset inventory</h1>
@@ -969,7 +1097,7 @@ export default function VyperDashboard() {
               </div>
             </>
           )}
-          {screen === "jobs" && (
+          {screen === "jobs" && dashboardAccessReady && (
             <>
               <div className="nb-crumbs">Jobs</div>
               <h1 className="nb-h1 nb-heading">Jobs</h1>
@@ -1064,7 +1192,7 @@ export default function VyperDashboard() {
               </div>
             </>
           )}
-          {screen === "jobdetail" && selectedJob && (
+          {screen === "jobdetail" && selectedJob && dashboardAccessReady && (
             <>
               <div className="nb-crumbs">Jobs / {selectedJob.target}</div>
               <h1 className="nb-h1 nb-heading">Job detail — <span className="nb-mono">{selectedJob.target}</span></h1>
@@ -1147,7 +1275,7 @@ export default function VyperDashboard() {
               </div>
             </>
           )}
-          {screen === "certificates" && (
+          {screen === "certificates" && dashboardAccessReady && (
             <>
               <div className="nb-crumbs">Certificates</div>
               <h1 className="nb-h1 nb-heading">Certificates</h1>
@@ -1254,7 +1382,7 @@ export default function VyperDashboard() {
             </>
           )}
  
-          {screen === "auditlogs" && (
+          {screen === "auditlogs" && dashboardAccessReady && (
             <>
               <div className="nb-crumbs">Audit logs</div>
               <h1 className="nb-h1 nb-heading">Audit trail</h1>
@@ -1292,7 +1420,7 @@ export default function VyperDashboard() {
               </div>
             </>
           )}
-          {screen === "settings" && (
+          {screen === "settings" && dashboardAccessReady && (
             <>
               <div className="nb-crumbs">Settings</div>
               <h1 className="nb-h1 nb-heading">Settings</h1>

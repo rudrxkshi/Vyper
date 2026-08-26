@@ -52,7 +52,7 @@ if [ "$TEST_MODE" != "1" ]; then
 	chown -R vyper-agent:vyper-executor "$state" "$logs"
   python3 -m venv "$opt/runtime"
   "$opt/runtime/bin/pip" install --disable-pip-version-check -r "$SCRIPT_DIR/payload/requirements.lock"
-  "$opt/runtime/bin/pip" install --disable-pip-version-check --no-deps "$SCRIPT_DIR"/payload/wheels/vyper_local_console-*.whl
+  "$opt/runtime/bin/pip" install --disable-pip-version-check --force-reinstall --no-deps "$SCRIPT_DIR"/payload/wheels/vyper_local_console-*.whl
   "$opt/runtime/bin/python" "$opt/boot/build_boot_image.py" --output-dir "$opt/boot"
 fi
 

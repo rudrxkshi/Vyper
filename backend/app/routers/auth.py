@@ -92,8 +92,10 @@ def logout(request: Request, response: Response, principal: OperatorPrincipal = 
 
 
 @router.get("/auth/me")
-def me(principal: OperatorPrincipal = Depends(require_api_key)):
+def me(principal: OperatorPrincipal = Depends(require_api_key), db: Session = Depends(get_db)):
+	user = db.get(UserRecord, principal.user_id) if principal.user_id else None
 	return {"id": principal.user_id, "username": principal.username, "role": principal.role.value, "mfa_assurance": principal.mfa_assurance,
+		"mfa_required": bool(user and user.mfa_enabled and principal.mfa_assurance == "PASSWORD"),
 		"development_identity": principal.development_identity}
 
 

@@ -1,1 +1,1 @@
-e4cdbd9977b3c31a6dec86933d5d1ca5b2422e31e99c0b9c0b7744b77430e4d6  vyper-local-console-linux-x86_64-1.0.0-rc1.tar.gz
+3393461908876dae320f50d5ee193743d0e5c878122b4ecc2081b4ed2febbd52  vyper-local-console-linux-x86_64-1.0.0-rc1.tar.gz

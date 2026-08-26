@@ -58,14 +58,18 @@ It binds to `127.0.0.1:8765` by default and exposes only:
 - `POST /jobs/sanitize`
 - `GET /jobs` for durable local history
 - `GET /jobs/{local_job_id}`
+- `GET /certificates` for certificate projections from authoritative local job results
+- `GET /audit-logs` for sequenced local lifecycle events
 - `POST /jobs/{local_job_id}/cancel` for pending jobs only
 - `POST /sync/enroll`
+- `GET /sync/status`
 - `GET /remote-jobs`
 - `POST /remote-jobs/{central_job_id}/approve`
 
 Set `VYPER_LOCAL_AGENT_API_KEY` to require `X-VYPER-API-Key`. The default CORS
-origins are the local dashboard at `http://127.0.0.1:3000` and
-`http://localhost:3000`; override them with a comma-separated
+origins include the packaged console at `http://127.0.0.1:8787` and
+`http://localhost:8787`, plus the development dashboard on port `3000`;
+override them with a comma-separated
 `VYPER_LOCAL_AGENT_CORS_ORIGINS`. Public binding is refused unless both
 `VYPER_LOCAL_AGENT_HOST` and `VYPER_LOCAL_AGENT_ALLOW_PUBLIC=true` are set
 deliberately.

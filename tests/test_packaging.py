@@ -120,6 +120,21 @@ def test_upgrade_preserves_config_credentials_and_state(tmp_path):
 	assert (rootfs / "var/lib/vyper/local-jobs.db").read_text(encoding="utf-8") == "preserved-state"
 
 
+def test_same_version_reinstall_replaces_immutable_ui_and_python_package(tmp_path):
+	installer = _load_installer()
+	package = _package_fixture(tmp_path)
+	rootfs = tmp_path / "rootfs"
+	installer.install_layout(package, rootfs, test_mode=True)
+	ui = rootfs / "opt/vyper/ui"
+	(ui / "obsolete-chunk.js").write_text("stale", encoding="utf-8")
+	(package / "payload/ui/index.html").write_text("VYPER updated", encoding="utf-8")
+	installer.install_layout(package, rootfs, test_mode=True)
+	assert (ui / "index.html").read_text(encoding="utf-8") == "VYPER updated"
+	assert not (ui / "obsolete-chunk.js").exists()
+	install_script = (ROOT / "packaging/linux/install.sh").read_text(encoding="utf-8")
+	assert "--force-reinstall --no-deps" in install_script
+
+
 def test_fresh_install_fixture_initializes_runtime_state_and_all_cli_wrappers(tmp_path):
 	installer = _load_installer()
 	rootfs = tmp_path / "fresh-rootfs"

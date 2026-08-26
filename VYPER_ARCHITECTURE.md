@@ -38,10 +38,11 @@ Local Console -> Local Agent -> VYPERAgent -> Block Device
                     +-> SQLite jobs, remote requests, and durable outbox
 ```
 
-The browser/local UI is unprivileged. The local agent is the privileged trust
-boundary and exposes only typed health, discovery, and sanitization-job routes;
-it does not expose arbitrary command execution. The central backend should not
-require raw block-device access in the final architecture.
+The browser/local UI and local agent are unprivileged. The local agent exposes
+only typed health, discovery, synchronization, and sanitization-job routes; it
+does not expose arbitrary command execution. Privileged storage operations cross
+an allowlisted Unix-socket protocol into the separate root executor. The central
+backend never requires raw block-device access.
 
 `LocalAgentGateway` is the current in-process development adapter.
 `RemoteLocalAgentGateway` speaks the versioned local-agent HTTP contract. It
@@ -83,7 +84,7 @@ UI polling
 
 The local transport is API version 2. Submission durably inserts `PENDING`
 before dispatch and returns without waiting for sanitization. SQLite schema
-version 1 stores timestamps, sanitized authorization metadata, orchestration
+version 2 stores timestamps, sanitized authorization metadata, orchestration
 sections, terminal evidence, errors, progress, and append-only event history.
 Plaintext ATA passwords remain only in the worker invocation and are cleared
 after it finishes.
@@ -106,8 +107,9 @@ percentage is generated.
 
 Cancellation is supported only while a job remains `PENDING`. Running storage
 commands are not assumed safely interruptible, so cancellation returns a
-conflict once work starts. Stage 3 uses a bounded in-process worker pool; native
-command process isolation and service packaging remain future hardening work.
+conflict once work starts. The unprivileged service uses bounded worker
+processes and sends typed requests to the separately packaged executor; a
+worker or client disconnect does not terminate the executor service.
 
 ## Agent enrollment and synchronization
 
@@ -159,7 +161,9 @@ agent credentials and ATA passwords, are rejected from outbox payloads.
 
 ```text
 systemd
-  +-- vyper-agent.service   root, 127.0.0.1:8765
+  +-- vyper-executor.service   root, typed Unix socket only
+  |
+  +-- vyper-agent.service   vyper-agent, 127.0.0.1:8765
   |      +-- /var/lib/vyper/local-jobs.db
   |      +-- /etc/vyper/agent-identity.json (0600)
   |      +-- outbound HTTPS synchronization
@@ -174,8 +178,9 @@ durable jobs and outbox state, and `/var/log/vyper` is reserved for operational
 logs. Upgrades replace only immutable files. Ordinary uninstall preserves all
 mutable records; `--purge` explicitly removes them.
 
-The initial privilege split keeps the existing tightly scoped execution API in
-one root service and runs the UI separately without privilege. Stage 7 adds a
+The privilege split keeps the root executor behind a group-restricted runtime
+directory and socket while the local agent and UI run without disk-group access.
+Stage 7 adds a
 separate, one-shot `boot_sanitize` initramfs mode for an offline former system
 disk; it does not relax the normal service's active-system-disk guard. See
 `docs/SYSTEM_DISK_SANITIZATION.md` and `docs/BOOT_ENVIRONMENT.md`.

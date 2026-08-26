@@ -112,6 +112,12 @@ export function saveLocalJobId(storage, localJobId) {
   else storage.removeItem(LOCAL_JOB_ID_STORAGE_KEY);
 }
 
+export function readCookie(name, cookieString = globalThis.document?.cookie || "") {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const match = String(cookieString).split(";").map((item) => item.trim()).find((item) => item.startsWith(prefix));
+  return match ? decodeURIComponent(match.slice(prefix.length)) : "";
+}
+
 export function createApiClient({
   baseUrl,
   apiKey = "",
@@ -119,7 +125,7 @@ export function createApiClient({
   fetchImpl = globalThis.fetch,
 }) {
   const normalizedBaseUrl = normalizeApiBaseUrl(baseUrl);
-  let csrfToken = "";
+  let csrfToken = readCookie("vyper_csrf");
 
   async function request(path, options = {}) {
     const headers = new Headers(options.headers || {});
@@ -174,6 +180,9 @@ export function createApiClient({
     listCertificates: () => request("/certificates"),
     listAuditLogs: () => request("/audit-logs"),
     listAgents: () => request("/agents"),
+    listOrganizations: () => request("/organizations"),
+    listPolicies: (organizationId) => request(`/organizations/${encodeURIComponent(organizationId)}/policies`),
+    listSecurityEvents: () => request("/security-events"),
     listAgentAssets: (agentId) => request(`/agents/${encodeURIComponent(agentId)}/assets`),
     listCentralJobs: () => request("/central-jobs"),
     listDownloads: () => request("/downloads"),
@@ -190,6 +199,10 @@ export function createApiClient({
       method: "POST",
       body: JSON.stringify(payload),
     }),
+    decideCentralJob: (centralJobId, decision) => request(
+      `/central-jobs/${encodeURIComponent(centralJobId)}/approvals`,
+      { method: "POST", body: JSON.stringify({ decision }) },
+    ),
     createSanitizeJob: (form) =>
       request("/jobs/sanitize", {
         method: "POST",

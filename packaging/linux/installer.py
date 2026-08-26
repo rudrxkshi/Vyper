@@ -29,14 +29,17 @@ def install_layout(package_root: Path, root: Path, *, test_mode: bool = False) -
 		(initramfs_hooks, 0o755), (initramfs_scripts, 0o755), (bin_dir, 0o755)):
 		path.mkdir(parents=True, exist_ok=True)
 		os.chmod(path, mode)
-	(opt / "ui").mkdir(exist_ok=True)
+	ui = opt / "ui"
+	if ui.exists():
+		shutil.rmtree(ui)
+	ui.mkdir()
 	(opt / "runtime").mkdir(exist_ok=True)
 	(opt / "boot").mkdir(exist_ok=True)
 	(opt / "docs").mkdir(exist_ok=True)
 	(opt / "trust").mkdir(exist_ok=True)
 	shutil.copy2(package_root / "manifest.json", opt / "manifest.json")
 	shutil.copy2(package_root / "payload" / "VERSION", opt / "VERSION")
-	shutil.copytree(package_root / "payload" / "ui", opt / "ui", dirs_exist_ok=True)
+	shutil.copytree(package_root / "payload" / "ui", ui, dirs_exist_ok=True)
 	shutil.copytree(package_root / "payload" / "docs", opt / "docs", dirs_exist_ok=True)
 	if (package_root / "payload" / "trust").is_dir():
 		shutil.copytree(package_root / "payload" / "trust", opt / "trust", dirs_exist_ok=True)

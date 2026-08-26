@@ -105,6 +105,7 @@ def _agent_dict(agent: AgentRecord, db: Session) -> dict[str, Any]:
 		"agent_version": agent.agent_version,
 		"api_version": agent.api_version,
 		"agent_protocol_version": agent.agent_protocol_version,
+		"organization_id": agent.organization_id,
 		"status": derived_agent_status(agent),
 		"last_seen_at": _iso(agent.last_seen_at),
 		"created_at": _iso(agent.created_at),

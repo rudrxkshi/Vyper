@@ -69,8 +69,10 @@ def test_mfa_totp_recovery_rotation_and_destructive_enforcement(tmp_path, monkey
 			assert recovery not in json.dumps(user.mfa_recovery_codes_json)
 		confirmed = client.post("/auth/mfa/confirm", json={"code": totp_code(secret)})
 		assert confirmed.status_code == 200 and confirmed.json()["mfa_assurance"] == "TOTP"
+		assert client.get("/auth/me").json()["mfa_required"] is False
 		client.post("/auth/logout")
 		client.post("/auth/login", json={"username": "operator", "password": "Correct-Horse-42!"})
+		assert client.get("/auth/me").json()["mfa_required"] is True
 		assert client.post("/auth/mfa/verify", json={"code": recovery}).json()["mfa_assurance"] == "RECOVERY"
 		client.post("/auth/logout"); client.post("/auth/login", json={"username": "operator", "password": "Correct-Horse-42!"})
 		assert client.post("/auth/mfa/verify", json={"code": recovery}).status_code == 401

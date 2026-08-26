@@ -16,9 +16,12 @@ or durable outbox. Private signing keys and the MFA encryption key remain
 external deployment secrets.
 
 Checksum-only releases remain supported; signed releases use externally
-generated Ed25519 signatures. VYPER does not
-provide system-disk boot sanitization, Windows/macOS packages, automatic
-updates, or process isolation for native storage commands.
+generated Ed25519 signatures. VYPER provides a separately authorized,
+one-shot GRUB2/initramfs system-disk workflow, but does not claim universal
+boot-platform or Secure Boot support. Windows/macOS packages and automatic
+updates are not implemented. Native storage execution is isolated behind the
+fixed-function executor process; compromise of that root service remains a
+documented residual risk.
 # Stage 13 production security controls
 
 The local console, synchronization client, local API, and job persistence run as the unprivileged `vyper-agent` identity. A separate root service listens only on `/run/vyper/executor.sock`, owned by `root:vyper-executor` with mode `0660`. Its versioned protocol permits only discovery, profiling, and VYPER sanitization operations. It accepts no executable name, arbitrary argv, shell fragment, network connection, or arbitrary output path. The helper revalidates request shape, execution mode, authorization, `/dev` target, and same-target exclusivity before invoking the existing VYPER orchestrator.

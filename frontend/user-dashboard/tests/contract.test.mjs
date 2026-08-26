@@ -14,6 +14,7 @@ import {
   createApiClient,
   formatApiError,
   loadLocalJobId,
+  readCookie,
   saveLocalJobId,
 } from "../lib/api.mjs";
 import {
@@ -448,6 +449,65 @@ test("central operator requests include the HttpOnly session cookie", async () =
   });
   await client.currentUser();
   assert.equal(requestOptions.credentials, "include");
+});
+
+test("central API client restores the readable CSRF token after page reload", async () => {
+  const originalDocument = globalThis.document;
+  globalThis.document = { cookie: "unrelated=value; vyper_csrf=reload-token%2Fsafe" };
+  let requestOptions;
+  try {
+    const client = createApiClient({
+      baseUrl: "https://central.example",
+      fetchImpl: async (_url, options) => {
+        requestOptions = options;
+        return new Response(JSON.stringify({ central_job_id: "central-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    await client.decideCentralJob("central-1", "APPROVED");
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  }
+  assert.equal(readCookie("vyper_csrf", "vyper_csrf=reload-token%2Fsafe"), "reload-token/safe");
+  assert.equal(new Headers(requestOptions.headers).get("X-CSRF-Token"), "reload-token/safe");
+});
+
+test("central security policy and approval APIs preserve scoped contracts", async () => {
+  const requests = [];
+  const client = createApiClient({
+    baseUrl: "https://central.example",
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, method: options.method || "GET", body: options.body ? JSON.parse(options.body) : null });
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await client.listOrganizations();
+  await client.listPolicies("organization/one");
+  await client.listSecurityEvents();
+  await client.decideCentralJob("central/job", "APPROVED");
+  assert.deepEqual(requests, [
+    { url: "https://central.example/organizations", method: "GET", body: null },
+    { url: "https://central.example/organizations/organization%2Fone/policies", method: "GET", body: null },
+    { url: "https://central.example/security-events", method: "GET", body: null },
+    { url: "https://central.example/central-jobs/central%2Fjob/approvals", method: "POST", body: { decision: "APPROVED" } },
+  ]);
+});
+
+test("central dashboard wires MFA policy security and approval workflows", () => {
+  const source = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  assert.match(source, /mfa_required/);
+  assert.match(source, /Verify multi-factor authentication/);
+  assert.match(source, /policy_id: selectedRemotePolicy/);
+  assert.match(source, /screen === "policies"/);
+  assert.match(source, /screen === "security-events"/);
+  assert.match(source, /decideCentralJob\(job, "APPROVED"\)/);
+  assert.match(source, /last heartbeat/);
 });
 
 test("agent and central job normalization preserve remote lifecycle state", () => {

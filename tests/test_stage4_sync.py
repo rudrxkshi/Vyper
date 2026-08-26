@@ -396,7 +396,9 @@ def test_organization_membership_scopes_agents_assets_and_central_jobs(tmp_path)
 		principal = OperatorPrincipal("tenant-a-user", "tenant-a-user", OperatorRole.ADMIN)
 		client.app.dependency_overrides[require_api_key] = lambda: principal
 		try:
-			assert [item["agent_id"] for item in client.get("/agents").json()] == [agent_a["agent_id"]]
+			visible_agents = client.get("/agents").json()
+			assert [item["agent_id"] for item in visible_agents] == [agent_a["agent_id"]]
+			assert visible_agents[0]["organization_id"] == organization_a["id"]
 			assert client.get(f"/agents/{agent_b['agent_id']}/assets").status_code == 403
 			assert {item["agent_id"] for item in client.get("/central-jobs").json()} == {agent_a["agent_id"]}
 		finally:
