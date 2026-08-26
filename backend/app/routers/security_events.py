@@ -9,7 +9,7 @@ from ..db import get_db
 from ..models import SecurityEventRecord
 
 
-router = APIRouter(tags=["security-events"], dependencies=[Depends(require_roles(OperatorRole.ADMIN, OperatorRole.OPERATOR, OperatorRole.AUDITOR))])
+router = APIRouter(tags=["security-events"], dependencies=[Depends(require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR, OperatorRole.AUDITOR, OperatorRole.VIEWER))])
 
 
 def _event_dict(record: SecurityEventRecord) -> dict:

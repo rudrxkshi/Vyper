@@ -10,7 +10,7 @@ from ..models import AuditLogRecord
 from ..schemas import AuditLogRead
 from ..services import audit_log_to_dict
 
-router = APIRouter(tags=["audit-logs"], dependencies=[Depends(require_roles(OperatorRole.ADMIN, OperatorRole.OPERATOR, OperatorRole.AUDITOR))])
+router = APIRouter(tags=["audit-logs"], dependencies=[Depends(require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR, OperatorRole.AUDITOR, OperatorRole.VIEWER))])
 
 
 @router.get("", response_model=list[AuditLogRead])

@@ -24,7 +24,10 @@ from ..agent_protocol import (
 from ..auth import OperatorPrincipal, OperatorRole, require_roles
 from ..command_signing import command_public_key_id, command_public_key_pem, sign_command
 from ..db import get_db
-from ..models import AgentAssetRecord, AgentRecord, CentralJobEventRecord, CentralJobRecord, EnrollmentTokenRecord
+from ..models import (
+	AgentAssetRecord, AgentRecord, CentralJobApprovalRecord, CentralJobEventRecord, CentralJobRecord,
+	EnrollmentTokenRecord, OrganizationRecord, RemotePolicyRecord,
+)
 from ..schemas import (
 	AgentEnrollRequest,
 	AgentEnrollResponse,
@@ -35,6 +38,8 @@ from ..schemas import (
 	EnrollmentTokenCreate,
 	EnrollmentTokenRead,
 	InventoryUpload,
+	OrganizationCreate,
+	RemotePolicyCreate,
 )
 from ..services import validate_result_integrity
 from ..security import record_audit_event, record_security_event
@@ -42,8 +47,9 @@ from ..security import record_audit_event, record_security_event
 
 router = APIRouter(tags=["agents"])
 _TERMINAL = {"VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"}
-_OPERATOR_READ = require_roles(OperatorRole.ADMIN, OperatorRole.OPERATOR, OperatorRole.AUDITOR)
-_OPERATOR_WRITE = require_roles(OperatorRole.ADMIN, OperatorRole.OPERATOR)
+_OPERATOR_READ = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR, OperatorRole.AUDITOR, OperatorRole.VIEWER)
+_OPERATOR_WRITE = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR)
+_SECURITY_APPROVER = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN)
 
 
 def _iso(value):
@@ -108,6 +114,9 @@ def _job_dict(job: CentralJobRecord, db: Session) -> dict[str, Any]:
 	events = db.execute(
 		select(CentralJobEventRecord).where(CentralJobEventRecord.central_job_id == job.central_job_id).order_by(CentralJobEventRecord.sequence)
 	).scalars().all()
+	approvals = db.execute(select(CentralJobApprovalRecord).where(
+		CentralJobApprovalRecord.central_job_id == job.central_job_id,
+	).order_by(CentralJobApprovalRecord.created_at)).scalars().all()
 	return {
 		"central_job_id": job.central_job_id,
 		"agent_id": job.agent_id,
@@ -135,6 +144,11 @@ def _job_dict(job: CentralJobRecord, db: Session) -> dict[str, Any]:
 		"integrity_status": job.integrity_status,
 		"execution_mode": (job.request_json or {}).get("execution_mode", "normal_local"),
 		"command": job.command_json,
+		"organization_id": job.organization_id,
+		"policy_id": job.policy_id,
+		"required_approvals": job.required_approvals,
+		"approval_count": len(approvals),
+		"approvals": [{"id": item.id, "approver": item.approver, "decision": item.decision, "created_at": _iso(item.created_at)} for item in approvals],
 		"events": [
 			{
 				"sequence": event.sequence,
@@ -147,6 +161,28 @@ def _job_dict(job: CentralJobRecord, db: Session) -> dict[str, Any]:
 			for event in events
 		],
 	}
+
+
+def _signed_command(job: CentralJobRecord, *, issued_at) -> dict[str, Any]:
+	"""Create the allowlisted endpoint command for an already authorized job."""
+	command = {
+		"command_id": job.central_job_id,
+		"device_id": job.agent_id,
+		"operation": "SANITIZE",
+		"issued_at": _iso(issued_at),
+		"expires_at": _iso(job.expires_at),
+		"nonce": job.nonce,
+		"parameters": {
+			"central_job_id": job.central_job_id,
+			"target_identity": job.target_identity,
+			"requested_target": job.requested_target,
+			"dry_run": job.dry_run,
+			"idempotency_key": job.idempotency_key,
+			"execution_mode": (job.request_json or {}).get("execution_mode", "normal_local"),
+		},
+		"authorization": job.authorization_json or {},
+	}
+	return sign_command(command)
 
 
 def _hardware_identity(device: dict[str, Any], agent_id: str) -> tuple[str, str]:
@@ -164,11 +200,71 @@ def _hardware_identity(device: dict[str, Any], agent_id: str) -> tuple[str, str]
 	return hashlib.sha256(stable.encode("utf-8")).hexdigest(), "HIGH" if serial else "LOW"
 
 
+def _validate_enrollment_identity(public_key_pem: str | None, public_key_id: str | None) -> None:
+	if bool(public_key_pem) != bool(public_key_id):
+		raise HTTPException(status_code=422, detail="Device public key and key ID must be supplied together.")
+	if not public_key_pem:
+		return
+	try:
+		from cryptography.hazmat.primitives import serialization
+		from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+		key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+		if not isinstance(key, Ed25519PublicKey):
+			raise ValueError("not Ed25519")
+		raw = key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+	except Exception as exc:
+		raise HTTPException(status_code=422, detail="Device public key must be a valid Ed25519 PEM key.") from exc
+	if hashlib.sha256(raw).hexdigest() != public_key_id:
+		raise HTTPException(status_code=422, detail="Device public key ID does not match the public key.")
+
+
+@router.post("/organizations", status_code=201)
+def create_organization(payload: OrganizationCreate, principal: OperatorPrincipal = Depends(require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN)), db: Session = Depends(get_db)):
+	organization = OrganizationRecord(id=str(uuid4()), name=payload.name.strip())
+	db.add(organization)
+	record_audit_event(db, actor=principal.audit_identity, action="ORGANIZATION_CREATED", resource=f"organization:{organization.id}", metadata={"name": organization.name})
+	try:
+		db.commit()
+	except IntegrityError as exc:
+		db.rollback()
+		raise HTTPException(status_code=409, detail="Organization name already exists.") from exc
+	return {"id": organization.id, "name": organization.name, "created_at": _iso(organization.created_at)}
+
+
+@router.post("/organizations/{organization_id}/policies", status_code=201)
+def create_remote_policy(organization_id: str, payload: RemotePolicyCreate, principal: OperatorPrincipal = Depends(_SECURITY_APPROVER), db: Session = Depends(get_db)):
+	if db.get(OrganizationRecord, organization_id) is None:
+		raise HTTPException(status_code=404, detail="Organization not found.")
+	if payload.requires_approval is False and payload.required_approvals:
+		raise HTTPException(status_code=422, detail="A policy without approvals must require zero approvals.")
+	policy = RemotePolicyRecord(id=str(uuid4()), organization_id=organization_id, name=payload.name.strip(),
+		remote_sanitization_allowed=payload.remote_sanitization_allowed, requires_approval=payload.requires_approval,
+		required_approvals=payload.required_approvals, allow_system_disk=payload.allow_system_disk)
+	db.add(policy)
+	record_audit_event(db, actor=principal.audit_identity, action="REMOTE_POLICY_CREATED", resource=f"policy:{policy.id}", metadata={"organization_id": organization_id, "name": policy.name, "required_approvals": policy.required_approvals})
+	db.commit()
+	return _policy_dict(policy)
+
+
+@router.get("/organizations/{organization_id}/policies", dependencies=[Depends(_OPERATOR_READ)])
+def list_remote_policies(organization_id: str, db: Session = Depends(get_db)):
+	return [_policy_dict(item) for item in db.execute(select(RemotePolicyRecord).where(RemotePolicyRecord.organization_id == organization_id)).scalars()]
+
+
+def _policy_dict(policy: RemotePolicyRecord) -> dict[str, Any]:
+	return {"id": policy.id, "organization_id": policy.organization_id, "name": policy.name,
+		"remote_sanitization_allowed": policy.remote_sanitization_allowed, "requires_approval": policy.requires_approval,
+		"required_approvals": policy.required_approvals, "allow_system_disk": policy.allow_system_disk,
+		"created_at": _iso(policy.created_at)}
+
+
 @router.post("/agents/enrollment-tokens", response_model=EnrollmentTokenRead)
-def create_enrollment_token(payload: EnrollmentTokenCreate, principal: OperatorPrincipal = Depends(require_roles(OperatorRole.ADMIN)), db: Session = Depends(get_db)):
+def create_enrollment_token(payload: EnrollmentTokenCreate, principal: OperatorPrincipal = Depends(require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN)), db: Session = Depends(get_db)):
+	if payload.organization_id and db.get(OrganizationRecord, payload.organization_id) is None:
+		raise HTTPException(status_code=404, detail="Organization not found.")
 	token = new_token("enroll")
 	expires_at = utc_now() + timedelta(seconds=payload.ttl_seconds)
-	db.add(EnrollmentTokenRecord(id=str(uuid4()), token_hash=token_hash(token), expires_at=expires_at))
+	db.add(EnrollmentTokenRecord(id=str(uuid4()), token_hash=token_hash(token), expires_at=expires_at, organization_id=payload.organization_id))
 	record_audit_event(db, actor=principal.audit_identity, action="ENROLLMENT_TOKEN_CREATED", resource="agent-enrollment",
 		metadata={"expires_at": _iso(expires_at)})
 	db.commit()
@@ -178,6 +274,7 @@ def create_enrollment_token(payload: EnrollmentTokenCreate, principal: OperatorP
 @router.post("/agents/enroll", response_model=AgentEnrollResponse)
 def enroll_agent(payload: AgentEnrollRequest, db: Session = Depends(get_db)):
 	require_protocol(payload.agent_protocol_version)
+	_validate_enrollment_identity(payload.device_public_key_pem, payload.device_public_key_id)
 	now = utc_now()
 	record = db.execute(select(EnrollmentTokenRecord).where(EnrollmentTokenRecord.token_hash == token_hash(payload.enrollment_token))).scalar_one_or_none()
 	if record is None or record.consumed_at is not None:
@@ -203,6 +300,7 @@ def enroll_agent(payload: AgentEnrollRequest, db: Session = Depends(get_db)):
 		public_key_pem=payload.device_public_key_pem,
 		public_key_id=payload.device_public_key_id,
 		identity_fingerprint=payload.identity_fingerprint,
+		organization_id=record.organization_id,
 	)
 	claimed = db.execute(
 		update(EnrollmentTokenRecord).where(
@@ -319,6 +417,15 @@ def create_central_job(agent_id: str, payload: CentralJobCreate, principal: Oper
 		raise HTTPException(status_code=404, detail="Active agent not found.")
 	if asset is None or asset.agent_id != agent_id:
 		raise HTTPException(status_code=422, detail="Asset does not belong to the selected agent.")
+	policy = db.get(RemotePolicyRecord, payload.policy_id) if payload.policy_id else None
+	if payload.policy_id and policy is None:
+		raise HTTPException(status_code=404, detail="Remote policy not found.")
+	if policy and policy.organization_id != agent.organization_id:
+		raise HTTPException(status_code=403, detail="Remote policy and agent must belong to the same organization.")
+	if policy and not policy.remote_sanitization_allowed:
+		raise HTTPException(status_code=403, detail="The selected policy blocks remote sanitization.")
+	if policy and (asset.profile_json or {}).get("is_system_device") is True and not policy.allow_system_disk:
+		raise HTTPException(status_code=403, detail="The selected policy blocks system-disk sanitization.")
 	if payload.execution_mode == "boot_sanitize" and (asset.profile_json or {}).get("is_system_device") is not True:
 		raise HTTPException(status_code=422, detail="Boot sanitization requires a synchronized system-disk asset.")
 	if payload.execution_mode == "normal_local" and (asset.profile_json or {}).get("is_system_device") is True and not payload.dry_run:
@@ -341,12 +448,13 @@ def create_central_job(agent_id: str, payload: CentralJobCreate, principal: Oper
 		requested_by_user_id=principal.user_id, requested_by=principal.audit_identity,
 		authorization_json={"central_approved": payload.central_authorized,
 			"local_approval_required": not payload.dry_run or payload.execution_mode == "boot_sanitize"},
-		status="QUEUED", created_at=now, updated_at=now,
+		status="AWAITING_APPROVAL" if (not payload.dry_run and policy and policy.requires_approval) else "QUEUED", created_at=now, updated_at=now,
 		expires_at=now + timedelta(seconds=payload.expires_in_seconds),
 		request_json={"asset_id": asset.id, "dry_run": payload.dry_run, "execution_mode": payload.execution_mode,
 			"target_observed_at_request": asset.device_path,
 			"identity_confidence": asset.identity_confidence},
-		idempotency_key=payload.idempotency_key, nonce=new_token("job"),
+		idempotency_key=payload.idempotency_key, nonce=new_token("job"), organization_id=agent.organization_id,
+		policy_id=policy.id if policy else None, required_approvals=policy.required_approvals if (policy and not payload.dry_run and policy.requires_approval) else 0,
 	)
 	db.add(job)
 	record_audit_event(db, actor=principal.audit_identity, action="REMOTE_JOB_REQUESTED", resource=f"central-job:{job.central_job_id}",
@@ -365,6 +473,34 @@ def create_central_job(agent_id: str, payload: CentralJobCreate, principal: Oper
 		if existing is None:
 			raise HTTPException(status_code=409, detail="Central job creation conflicted with an existing record.") from exc
 		return _job_dict(existing, db)
+	return _job_dict(job, db)
+
+
+@router.post("/central-jobs/{central_job_id}/approvals")
+def approve_central_job(central_job_id: str, principal: OperatorPrincipal = Depends(_SECURITY_APPROVER), db: Session = Depends(get_db)):
+	job = db.get(CentralJobRecord, central_job_id)
+	if job is None:
+		raise HTTPException(status_code=404, detail="Central job not found.")
+	if job.status != "AWAITING_APPROVAL":
+		raise HTTPException(status_code=409, detail="Central job is not awaiting approval.")
+	if not principal.development_identity and principal.mfa_assurance not in {"TOTP", "RECOVERY"}:
+		raise HTTPException(status_code=403, detail="An MFA-authenticated security administrator is required to approve sanitization.")
+	if principal.user_id and principal.user_id == job.requested_by_user_id:
+		raise HTTPException(status_code=403, detail="The requester cannot approve this sanitization request.")
+	approval = CentralJobApprovalRecord(id=str(uuid4()), central_job_id=job.central_job_id, approver_user_id=principal.user_id,
+		approver=principal.audit_identity, decision="APPROVED", created_at=utc_now())
+	db.add(approval)
+	try:
+		db.flush()
+	except IntegrityError as exc:
+		db.rollback()
+		raise HTTPException(status_code=409, detail="This approver has already acted on the central job.") from exc
+	count = db.scalar(select(func.count()).select_from(CentralJobApprovalRecord).where(CentralJobApprovalRecord.central_job_id == job.central_job_id)) or 0
+	if count >= job.required_approvals:
+		job.status = "QUEUED"; job.updated_at = utc_now()
+	job.authorization_json = {**(job.authorization_json or {}), "approval_count": count, "required_approvals": job.required_approvals}
+	record_audit_event(db, actor=principal.audit_identity, action="WIPE_APPROVED", resource=f"central-job:{job.central_job_id}", metadata={"approval_count": count, "required_approvals": job.required_approvals})
+	db.commit()
 	return _job_dict(job, db)
 
 
@@ -399,6 +535,10 @@ def claim_next_job(response: Response, agent: AgentRecord = Depends(authenticate
 		response.status_code = status.HTTP_204_NO_CONTENT
 		return None
 	db.refresh(job)
+	if job.command_json is None:
+		job.command_json = _signed_command(job, issued_at=now)
+		db.commit()
+		db.refresh(job)
 	return {
 		"agent_protocol_version": AGENT_PROTOCOL_VERSION,
 		"central_job_id": job.central_job_id,
@@ -411,6 +551,7 @@ def claim_next_job(response: Response, agent: AgentRecord = Depends(authenticate
 		"idempotency_key": job.idempotency_key,
 		"status": job.status,
 		"execution_mode": (job.request_json or {}).get("execution_mode", "normal_local"),
+		"command": job.command_json,
 	}
 
 

@@ -29,7 +29,7 @@ from .routers.jobs import router as jobs_router
 from .routers.results import router as results_router
 from .routers.security_events import router as security_events_router
 
-SUPPORTED_ALEMBIC_HEAD = "0003_remote_command_identity"
+SUPPORTED_ALEMBIC_HEAD = "0004_organization_policy_approvals"
 
 
 def require_supported_schema(engine) -> None:

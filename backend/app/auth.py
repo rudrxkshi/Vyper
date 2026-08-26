@@ -18,9 +18,12 @@ from .security import production_mode, token_digest
 
 
 class OperatorRole(str, Enum):
+	SUPER_ADMIN = "SUPER_ADMIN"
 	ADMIN = "ADMIN"
+	SECURITY_ADMIN = "SECURITY_ADMIN"
 	OPERATOR = "OPERATOR"
 	AUDITOR = "AUDITOR"
+	VIEWER = "VIEWER"
 
 
 @dataclass(frozen=True)

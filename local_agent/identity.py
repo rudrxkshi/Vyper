@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,3 +60,22 @@ class Ed25519IdentityStore:
 			public_key_pem=public_pem.decode("ascii"),
 			public_key_id=hashlib.sha256(public_raw).hexdigest(),
 		)
+
+
+def endpoint_identity_fingerprint(identity: DeviceIdentity) -> str:
+	"""Return a privacy-preserving, stable-enough endpoint binding value.
+
+	The public key remains the cryptographic device identity. This fingerprint
+	adds locally available host characteristics only as a tamper/change signal;
+	it is not used as a replacement for the key or a hardware serial number.
+	"""
+	machine_id = ""
+	for candidate in (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")):
+		try:
+			machine_id = candidate.read_text(encoding="utf-8").strip()
+		except OSError:
+			continue
+		if machine_id:
+			break
+	material = "|".join((identity.public_key_id, machine_id, platform.system(), platform.machine()))
+	return hashlib.sha256(material.encode("utf-8")).hexdigest()

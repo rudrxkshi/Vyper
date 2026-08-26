@@ -21,6 +21,8 @@ from backend.app.main import create_app as create_central_app
 from backend.app.models import AgentRecord, EnrollmentTokenRecord
 from local_agent.storage import LocalJobStore
 from local_agent.sync import AgentCredentialStore, CentralSyncClient, hardware_identity
+from local_agent.identity import Ed25519IdentityStore, endpoint_identity_fingerprint
+from local_agent.command_verifier import verify_remote_command
 
 
 class DiscoveryStub:
@@ -109,6 +111,36 @@ def test_expired_enrollment_token_fails(tmp_path):
 	assert response.status_code == 410
 
 
+def test_enrollment_binds_a_valid_ed25519_endpoint_identity(tmp_path):
+	identity = Ed25519IdentityStore(tmp_path / "endpoint-key.pem").load_or_create()
+	with _central_client(tmp_path) as client:
+		token = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600}).json()["token"]
+		response = client.post("/agents/enroll", json={
+			"enrollment_token": token, "hostname": "identity-host", "platform": "Linux", "architecture": "x86_64",
+			"agent_version": "4.0-test", "api_version": "2", "agent_protocol_version": "1",
+			"device_public_key_pem": identity.public_key_pem, "device_public_key_id": identity.public_key_id,
+			"identity_fingerprint": endpoint_identity_fingerprint(identity),
+		})
+		with client.app.state.session_factory() as db:
+			agent = db.get(AgentRecord, response.json()["agent_id"])
+	assert response.status_code == 200
+	assert agent.public_key_pem == identity.public_key_pem
+	assert agent.public_key_id == identity.public_key_id
+
+
+def test_enrollment_rejects_mismatched_public_key_id(tmp_path):
+	identity = Ed25519IdentityStore(tmp_path / "endpoint-key.pem").load_or_create()
+	with _central_client(tmp_path) as client:
+		token = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600}).json()["token"]
+		response = client.post("/agents/enroll", json={
+			"enrollment_token": token, "hostname": "identity-host", "platform": "Linux", "architecture": "x86_64",
+			"agent_version": "4.0-test", "api_version": "2", "agent_protocol_version": "1",
+			"device_public_key_pem": identity.public_key_pem, "device_public_key_id": "0" * 64,
+			"identity_fingerprint": endpoint_identity_fingerprint(identity),
+		})
+	assert response.status_code == 422
+
+
 def test_agent_heartbeat_auth_offline_derivation_and_revocation(tmp_path):
 	with _central_client(tmp_path) as client:
 		enrolled = _enroll(client).json()
@@ -178,6 +210,48 @@ def test_job_claim_is_assigned_atomic_idempotent_and_waits_for_local_approval(tm
 	assert claim.status_code == 200
 	assert claim.json()["status"] == "WAITING_LOCAL_APPROVAL"
 	assert second_claim.status_code == 204
+
+
+def test_claimed_job_contains_endpoint_verifiable_signed_command(tmp_path):
+	with _central_client(tmp_path) as client:
+		enrolled, headers, _asset, _job = _prepare_agent_asset_job(client)
+		claim = client.get("/agent/jobs/next", headers=headers).json()
+	verify_remote_command(
+		claim["command"], agent_id=enrolled["agent_id"],
+		public_key_pem=enrolled["command_verification_key_pem"],
+	)
+	assert claim["command"]["parameters"]["central_job_id"] == claim["central_job_id"]
+
+
+def test_signed_command_nonce_cannot_be_reused_for_another_command(tmp_path):
+	store = LocalJobStore(tmp_path / "local.db")
+	assert store.record_remote_command(command_id="command-1", nonce="nonce-1", command_hash="a" * 64) is True
+	assert store.record_remote_command(command_id="command-1", nonce="nonce-1", command_hash="a" * 64) is False
+	with pytest.raises(Exception, match="nonce|command ID"):
+		store.record_remote_command(command_id="command-2", nonce="nonce-1", command_hash="b" * 64)
+
+
+def test_organization_policy_requires_approval_before_command_queueing(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization = client.post("/organizations", json={"name": "Acme"}).json()
+		policy = client.post(f"/organizations/{organization['id']}/policies", json={
+			"name": "Two-person wipe", "requires_approval": True, "required_approvals": 1,
+		}).json()
+		token = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600, "organization_id": organization["id"]}).json()["token"]
+		enrolled = _enroll(client, token=token).json(); headers = _auth(enrolled)
+		assert client.put("/agent/inventory", headers=headers, json=_inventory([_device()])).status_code == 200
+		asset = client.get(f"/agents/{enrolled['agent_id']}/assets").json()[0]
+		created = client.post(f"/agents/{enrolled['agent_id']}/jobs", json={
+			"asset_id": asset["id"], "dry_run": False, "central_authorized": True,
+			"destructive_confirmation": "SANITIZE", "idempotency_key": "approval-policy-0001",
+			"expires_in_seconds": 3600, "policy_id": policy["id"],
+		}).json()
+		assert created["status"] == "AWAITING_APPROVAL"
+		assert client.get("/agent/jobs/next", headers=headers).status_code == 204
+		approved = client.post(f"/central-jobs/{created['central_job_id']}/approvals")
+	assert approved.status_code == 200
+	assert approved.json()["status"] == "QUEUED"
+	assert approved.json()["approval_count"] == 1
 
 
 def test_system_disk_boot_dry_run_still_requires_local_boot_confirmation(tmp_path):

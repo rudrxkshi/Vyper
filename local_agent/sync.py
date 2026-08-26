@@ -18,6 +18,8 @@ import httpx
 from agent.discovery import DeviceDiscovery
 
 from .storage import LocalJobStore, TERMINAL_STATES, utc_now
+from .identity import Ed25519IdentityStore, endpoint_identity_fingerprint
+from .command_verifier import canonical_command, verify_remote_command
 
 
 AGENT_PROTOCOL_VERSION = "1"
@@ -73,6 +75,7 @@ class CentralSyncClient:
 		*,
 		central_url: str,
 		credential_store: AgentCredentialStore,
+		identity_store: Ed25519IdentityStore | None = None,
 		job_store: LocalJobStore,
 		discovery: DeviceDiscovery,
 		submit_local_job: Callable[..., str],
@@ -82,6 +85,7 @@ class CentralSyncClient:
 	) -> None:
 		self.central_url = central_url.rstrip("/")
 		self.credential_store = credential_store
+		self.identity_store = identity_store or Ed25519IdentityStore(credential_store.path.with_name("agent_identity.pem"))
 		self.job_store = job_store
 		self.discovery = discovery
 		self.submit_local_job = submit_local_job
@@ -91,6 +95,7 @@ class CentralSyncClient:
 		self._approval_lock = threading.Lock()
 
 	def enroll(self, enrollment_token: str, *, display_name: str | None = None) -> dict[str, Any]:
+		identity = self.identity_store.load_or_create()
 		payload = {
 			"enrollment_token": enrollment_token,
 			"display_name": display_name,
@@ -100,11 +105,16 @@ class CentralSyncClient:
 			"agent_version": os.getenv("VYPER_AGENT_VERSION", __version__),
 			"api_version": "2",
 			"agent_protocol_version": AGENT_PROTOCOL_VERSION,
+			"device_public_key_pem": identity.public_key_pem,
+			"device_public_key_id": identity.public_key_id,
+			"identity_fingerprint": endpoint_identity_fingerprint(identity),
 		}
 		with self._client(authenticated=False) as client:
 			response = client.post("/agents/enroll", json=payload)
 			response.raise_for_status()
 			credential = response.json()
+		if not credential.get("command_verification_key_pem") or not credential.get("command_verification_key_id"):
+			raise RuntimeError("Central enrollment response did not include a command verification key.")
 		self.credential_store.save(credential)
 		return {"agent_id": credential["agent_id"], "agent_protocol_version": credential["agent_protocol_version"]}
 
@@ -163,10 +173,42 @@ class CentralSyncClient:
 			payload = response.json()
 		if payload.get("agent_protocol_version") != AGENT_PROTOCOL_VERSION:
 			raise RuntimeError("Central returned an incompatible agent protocol version.")
-		request = self.job_store.save_remote_request(payload)
+		request = self._verify_and_record_command(payload)
 		if payload.get("execution_mode", "normal_local") == "normal_local" and request["dry_run"] and self.auto_run_dry_run and request["local_job_id"] is None:
 			self.approve_remote_job(request["central_job_id"], local_approved=False)
 		return self.job_store.get_remote_request(payload["central_job_id"])
+
+	def _verify_and_record_command(self, payload: dict[str, Any]) -> dict[str, Any]:
+		credential = self._credential()
+		command = payload.get("command")
+		if not isinstance(command, dict):
+			raise RuntimeError("Central job assignment did not contain a signed command.")
+		try:
+			verify_remote_command(
+				command, agent_id=credential["agent_id"],
+				public_key_pem=credential["command_verification_key_pem"],
+			)
+		except Exception as exc:
+			raise RuntimeError(f"Remote command validation failed: {exc}") from exc
+		parameters = command["parameters"]
+		if str(parameters.get("central_job_id") or "") != str(command["command_id"]):
+			raise RuntimeError("Remote command identity does not match its job reference.")
+		assignment = {
+			"central_job_id": command["command_id"], "target_identity": parameters.get("target_identity"),
+			"requested_target": parameters.get("requested_target"), "dry_run": parameters.get("dry_run"),
+			"authorization_policy": command.get("authorization") or {}, "expires_at": command["expires_at"],
+			"idempotency_key": parameters.get("idempotency_key"), "nonce": command["nonce"],
+			"status": payload.get("status"), "execution_mode": parameters.get("execution_mode", "normal_local"),
+			"command": command,
+		}
+		for field in ("target_identity", "requested_target", "idempotency_key"):
+			if not assignment[field]:
+				raise RuntimeError(f"Remote command is missing required {field}.")
+		self.job_store.record_remote_command(
+			command_id=str(command["command_id"]), nonce=str(command["nonce"]),
+			command_hash=hashlib.sha256(canonical_command(command)).hexdigest(),
+		)
+		return self.job_store.save_remote_request(assignment)
 
 	def approve_remote_job(self, central_job_id: str, *, local_approved: bool, ata_password: str | None = None) -> str:
 		with self._approval_lock:

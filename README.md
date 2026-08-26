@@ -89,16 +89,23 @@ to local `POST /sync/enroll`. Enrollment credentials are stored locally with
 owner-only permissions; central stores only token hashes. Agent requests use a
 separate Bearer credential from the operator `X-VYPER-API-Key`.
 
-The local agent initiates every central connection. It sends heartbeat and
-inventory updates, polls for an assigned job, and uploads sequenced progress
-and one terminal result through a durable SQLite outbox with bounded retry.
+The local agent initiates every central connection. During enrollment it creates
+an endpoint-local Ed25519 keypair, registers only its public key and a
+privacy-preserving endpoint fingerprint, and pins the central command
+verification key returned by the enrollment response. It sends heartbeat and
+inventory updates, polls for a signed assigned job, and uploads sequenced
+progress and one terminal result through a durable SQLite outbox with bounded
+retry.
 This works through ordinary outbound NAT without exposing the local API.
 
-Destructive remote requests always stop at `WAITING_LOCAL_APPROVAL`. The local
-console re-discovers the device and checks its stable identity and system-device
-status before creating a local job. Central authorization is recorded but does
-not replace local approval. ATA passwords are transient and are never placed in
-the central request or durable outbox.
+Destructive remote requests always stop at `WAITING_LOCAL_APPROVAL`. Before an
+assignment can reach that state, the agent verifies the Ed25519 signature,
+central signing-key identity, intended agent, allowlisted operation, issue/expiry
+times, and durable command nonce. The local console then re-discovers the device
+and checks its stable identity and system-device status before creating a local
+job. Central authorization is recorded but does not replace local approval. ATA
+passwords are transient and are never placed in the central request or durable
+outbox.
 
 Synchronization remains polling-based and outbound-only; the central service
 does not open an inbound control channel to the local machine.

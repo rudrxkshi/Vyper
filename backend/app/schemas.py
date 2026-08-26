@@ -163,6 +163,7 @@ class JobRead(BaseModel):
 class EnrollmentTokenCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    organization_id: str | None = None
 
 
 class EnrollmentTokenRead(BaseModel):
@@ -249,6 +250,21 @@ class CentralJobCreate(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
     expires_in_seconds: int = Field(default=3600, ge=60, le=86400)
     execution_mode: str = Field(default="normal_local", pattern=r"^(normal_local|boot_sanitize)$")
+    policy_id: str | None = None
+
+
+class OrganizationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=255)
+
+
+class RemotePolicyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=128)
+    remote_sanitization_allowed: bool = True
+    requires_approval: bool = True
+    required_approvals: int = Field(default=1, ge=0, le=2)
+    allow_system_disk: bool = False
 
 
 class AgentJobEventUpload(BaseModel):

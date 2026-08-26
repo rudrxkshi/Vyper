@@ -149,12 +149,12 @@ def verify_mfa(payload: MFACodeRequest, request: Request, response: Response,
 
 
 @router.get("/users", response_model=list[UserRead])
-def list_users(_principal: OperatorPrincipal = Depends(require_roles(OperatorRole.ADMIN)), db: Session = Depends(get_db)):
+def list_users(_principal: OperatorPrincipal = Depends(require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN)), db: Session = Depends(get_db)):
 	return [_user_dict(user) for user in db.execute(select(UserRecord).order_by(UserRecord.username)).scalars()]
 
 
 @router.post("/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-def create_user(payload: UserCreate, request: Request, principal: OperatorPrincipal = Depends(require_roles(OperatorRole.ADMIN)), db: Session = Depends(get_db)):
+def create_user(payload: UserCreate, request: Request, principal: OperatorPrincipal = Depends(require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN)), db: Session = Depends(get_db)):
 	try:
 		role = OperatorRole(payload.role.upper())
 		password_hash = hash_password(payload.password)
@@ -176,7 +176,7 @@ def create_user(payload: UserCreate, request: Request, principal: OperatorPrinci
 
 
 @router.patch("/users/{user_id}", response_model=UserRead)
-def update_user(user_id: str, payload: UserUpdate, request: Request, principal: OperatorPrincipal = Depends(require_roles(OperatorRole.ADMIN)), db: Session = Depends(get_db)):
+def update_user(user_id: str, payload: UserUpdate, request: Request, principal: OperatorPrincipal = Depends(require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN)), db: Session = Depends(get_db)):
 	user = db.get(UserRecord, user_id)
 	if user is None:
 		raise HTTPException(status_code=404, detail="User not found.")

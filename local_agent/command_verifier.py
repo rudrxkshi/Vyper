@@ -34,6 +34,8 @@ def verify_remote_command(
 ) -> None:
 	if not isinstance(command, dict):
 		raise CommandVerificationError("Remote command is missing.")
+	if not str(command.get("command_id") or ""):
+		raise CommandVerificationError("Remote command ID is missing.")
 	signature = command.get("signature")
 	if not isinstance(signature, dict):
 		raise CommandVerificationError("Remote command signature is missing.")
@@ -47,10 +49,15 @@ def verify_remote_command(
 	nonce = str(command.get("nonce") or "")
 	if not nonce:
 		raise CommandVerificationError("Remote command nonce is missing.")
+	issued_at = _parse_time(str(command.get("issued_at") or ""))
 	expires_at = _parse_time(str(command.get("expires_at") or ""))
 	current = now or datetime.now(timezone.utc)
+	if issued_at > current:
+		raise CommandVerificationError("Remote command was issued in the future.")
 	if expires_at <= current:
 		raise CommandVerificationError("Remote command has expired.")
+	if not isinstance(command.get("parameters"), dict):
+		raise CommandVerificationError("Remote command parameters are missing.")
 
 	serialization, Ed25519PublicKey = _crypto()
 	public_key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
