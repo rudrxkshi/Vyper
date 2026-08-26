@@ -125,6 +125,7 @@ def validate_password(password: str) -> None:
 def record_audit_event(
 	db: Session, *, actor: str | None, action: str, resource: str | None = None,
 	metadata: dict[str, Any] | None = None, request_id: str | None = None, job_id: str | None = None,
+	organization_id: str | None = None,
 ) -> AuditLogRecord:
 	previous = db.execute(select(AuditLogRecord).order_by(AuditLogRecord.created_at.desc(), AuditLogRecord.id.desc())).scalars().first()
 	previous_hash = previous.event_hash if previous else None
@@ -134,12 +135,13 @@ def record_audit_event(
 	canonical = json.dumps({
 		"previous_hash": previous_hash, "actor": actor, "action": action, "resource": resource,
 		"timestamp": timestamp, "metadata": safe_metadata, "request_id": request_id,
+		**({"organization_id": organization_id} if organization_id is not None else {}),
 	}, sort_keys=True, separators=(",", ":"), default=str)
 	record = AuditLogRecord(
 		id=str(uuid4()), job_id=job_id, action=action, actor=actor, resource=resource,
 		request_json=safe_metadata, response_json={}, request_id=request_id,
 		previous_hash=previous_hash, event_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-		created_at=event_time,
+		organization_id=organization_id, created_at=event_time,
 	)
 	db.add(record)
 	return record
@@ -148,7 +150,7 @@ def record_audit_event(
 def record_security_event(
 	db: Session, *, event_type: str, severity: str = "INFO", actor: str | None = None,
 	resource: str | None = None, agent_id: str | None = None, central_job_id: str | None = None,
-	metadata: dict[str, Any] | None = None,
+	metadata: dict[str, Any] | None = None, organization_id: str | None = None,
 ) -> SecurityEventRecord:
 	record = SecurityEventRecord(
 		id=str(uuid4()),
@@ -158,6 +160,7 @@ def record_security_event(
 		resource=resource,
 		agent_id=agent_id,
 		central_job_id=central_job_id,
+		organization_id=organization_id,
 		metadata_json=redact(metadata or {}),
 		created_at=datetime.now(timezone.utc),
 	)
@@ -172,6 +175,7 @@ def verify_audit_chain(records: list[AuditLogRecord]) -> bool:
 			"previous_hash": previous_hash, "actor": record.actor, "action": record.action,
 			"resource": record.resource, "timestamp": _audit_timestamp(record.created_at),
 			"metadata": record.request_json or {}, "request_id": record.request_id,
+			**({"organization_id": record.organization_id} if record.organization_id is not None else {}),
 		}, sort_keys=True, separators=(",", ":"), default=str)
 		expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 		if record.previous_hash != previous_hash or not record.event_hash or not hmac.compare_digest(record.event_hash, expected):

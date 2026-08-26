@@ -278,4 +278,5 @@ def audit_log_to_dict(audit_log: AuditLogRecord) -> dict[str, Any]:
         "request_id": audit_log.request_id,
         "previous_hash": audit_log.previous_hash,
         "event_hash": audit_log.event_hash,
+        "organization_id": audit_log.organization_id,
     }

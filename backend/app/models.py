@@ -108,6 +108,7 @@ class AuditLogRecord(Base):
 	request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 	previous_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 	event_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+	organization_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=True, index=True)
 	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 	job: Mapped[JobRecord | None] = relationship(back_populates="audit_logs")
@@ -204,6 +205,17 @@ class OrganizationRecord(Base):
 	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class OrganizationMembershipRecord(Base):
+	__tablename__ = "organization_memberships"
+	__table_args__ = (UniqueConstraint("organization_id", "user_id", name="uq_organization_membership"),)
+
+	id: Mapped[str] = mapped_column(String(36), primary_key=True)
+	organization_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
+	user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+	role: Mapped[str] = mapped_column(String(32), nullable=False, default="MEMBER")
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class RemotePolicyRecord(Base):
 	__tablename__ = "remote_policies"
 	__table_args__ = (UniqueConstraint("organization_id", "name", name="uq_remote_policy_organization_name"),)
@@ -215,6 +227,8 @@ class RemotePolicyRecord(Base):
 	requires_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 	required_approvals: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 	allow_system_disk: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+	version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+	revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -296,6 +310,7 @@ class SecurityEventRecord(Base):
 	resource: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
 	agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 	central_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+	organization_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=True, index=True)
 	metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

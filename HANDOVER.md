@@ -1,241 +1,142 @@
-# VYPER handover
+# VYPER handover — tenant isolation slice
 
-## Current date/time
+## Date and checkout
 
-2026-08-26, Asia/Kolkata.
+- Date: 2026-08-26 (Asia/Kolkata)
+- Checkout: `C:\Users\Kalpit\Documents\ChatGPT\AGRILEDGER\.tmp\Vyper`
+- Branch: `main`, tracking `origin/main`
+- Starting commit: `5edf972` (`handover`)
 
-## Current branch
+The parent `AGRILEDGER` checkout is unrelated and intentionally untouched.
+All work below is uncommitted. Preserve it.
 
-`main` tracking `origin/main`; baseline commit is `35275c2` (`stiff`).
+## Work completed in this slice
 
-## Project state
+Implemented the first enforceable central-API tenant-isolation boundary:
 
-VYPER remains an evidence-driven local sanitization platform with an outbound
-central control plane. The existing profiler, policy engine, pathways, verifier,
-evidence, certificates, fixed-function privileged executor, durable SQLite
-local jobs/outbox, and Linux packaging were preserved.
+- Added explicit `organization_memberships` records, unique on organization and
+  user, with `OWNER` or `MEMBER` membership roles.
+- A real authenticated creator is made the `OWNER` when creating an
+  organization.
+- Added scoped organization/member endpoints:
+  - `GET /organizations`
+  - `POST /organizations/{organization_id}/members`
+  - `GET /organizations/{organization_id}/members`
+  - `DELETE /organizations/{organization_id}/members/{user_id}` (retains at
+    least one owner)
+- Added membership checks for organization policies and organization-bound
+  enrollment-token creation.
+- Policy listing now returns `404` for an unknown organization instead of
+  silently returning an empty list.
+- Added `PATCH /organizations/{organization_id}/members/{user_id}` and
+  `DELETE /organizations/{organization_id}/members/{user_id}`. Only global
+  administrators or organization owners can change membership, and the final
+  owner cannot be demoted or removed.
+- Added remote-policy lifecycle fields (`version`, `revoked_at`) and
+  `PATCH /organizations/{organization_id}/policies/{policy_id}`. Policy
+  changes increment the version; revoked policies are rejected for new central
+  jobs. Unknown policy organizations return `404`.
+- Membership writes require global administration or organization ownership;
+  the stored owner/member role is now enforced for membership administration.
+- Scoped operator access to agents, agent assets, central job creation,
+  central-job approval, and central-job/agent list endpoints.
+- `SUPER_ADMIN` retains explicit global access. Development compatibility
+  identities also retain global access for the pre-existing local test mode.
+  All non-super-admin real users fail closed for resources without an assigned
+  organization, including legacy null-organization agents/jobs.
+- Added forward-only migration
+  `0005_organization_memberships`; the supported production Alembic head is
+  now `0005_organization_memberships`.
+- Added a regression test that creates two tenants and confirms a real
+  non-development ADMIN membership can only list its own agents/jobs and is
+  forbidden from another tenant's assets.
+- Added organization ownership to audit and security-event records, including
+  the audit-chain canonical payload for new tenant-tagged events. Central
+  agent/job/policy/enrollment writes now pass the resolved organization ID.
+- Tenant-filtered `GET /audit-logs` and `GET /security-events` now exclude
+  records from other organizations and fail closed for legacy null-organization
+  records. Legacy local-only `/jobs`, `/assets`, `/results`, and
+  `/certificates` routes are explicitly global-scope-only until their records
+  receive ownership fields.
+- Added forward-only migration `0006_organization_event_scope`; production
+  schema head is now `0006_organization_event_scope`.
 
-Two incremental enterprise-control-plane slices are present in the working tree:
+## Modified files
 
-1. Endpoint-bound Ed25519 enrollment and signed remote command validation.
-2. Initial organization/policy/approval backend workflow.
+- `backend/app/models.py`
+- `backend/app/auth.py`
+- `backend/app/schemas.py`
+- `backend/app/routers/agents.py`
+- `backend/app/main.py`
+- `migrations/versions/0005_organization_memberships.py` (new)
+- `tests/test_stage4_sync.py`
+- `backend/app/routers/audit_logs.py`
+- `backend/app/routers/security_events.py`
+- `backend/app/routers/jobs.py`
+- `backend/app/routers/devices.py`
+- `backend/app/routers/results.py`
+- `backend/app/routers/certificates.py`
+- `backend/app/security.py`
+- `backend/app/services.py`
+- `migrations/versions/0006_organization_event_scope.py` (new)
 
-The worktree is intentionally uncommitted. Do not discard these changes.
-
-## What was completed
-
-### Secure endpoint identity and remote commands
-
-- Agent enrollment creates an endpoint-local Ed25519 key using
-  `local_agent.identity.Ed25519IdentityStore`.
-- The private key is written with mode `0600`; enrollment sends only public PEM,
-  public-key ID, and a privacy-preserving endpoint fingerprint.
-- The central service validates that the submitted key is an Ed25519 PEM and
-  that its SHA-256 key ID matches before registering the agent.
-- Central job delivery now persists and returns a canonical signed `SANITIZE`
-  command. It includes command/job ID, target agent, issue/expiry timestamps,
-  nonce, typed parameters, and authorization metadata.
-- The local agent pins the central verification key supplied at enrollment and
-  verifies command signature, key ID, agent target, operation allowlist,
-  issue/expiry timestamps, and parameters before writing a remote request.
-- `LocalJobStore.remote_command_receipts` durably detects nonce/command-ID reuse
-  with a different command. Identical transport retries are safe/idempotent.
-- The pre-existing re-discovery, stable target identity, mounted/system-disk,
-  eligibility, separate local approval, and durable worker safeguards remain in
-  force before an actual sanitization job is submitted.
-
-### Initial organization, policy, and approval workflow
-
-- Added organization records and organization-scoped remote policy records.
-- Enrollment tokens may carry an organization ID; enrolled agents inherit it.
-- Policies can allow/block remote sanitization, disallow system-disk use, and
-  require zero to two central approvals.
-- Policy-backed destructive requests enter `AWAITING_APPROVAL`; they cannot be
-  claimed/delivered until the required number of approvals is reached.
-- Central approvals are append-only, one per real user per job, and prevent a
-  requester from approving their own job.
-- Approval is limited to `SUPER_ADMIN`, `ADMIN`, or `SECURITY_ADMIN`, and a
-  non-development session must have TOTP or recovery-code MFA assurance.
-- The existing local approval remains independent and is still required for
-  destructive execution.
-- Legacy jobs with no policy retain their existing behavior during migration.
-
-## Files changed
-
-- `README.md`: documents local key generation, central-key pinning, command
-  validation, and local approval behavior.
-- `VYPER_ARCHITECTURE.md`: documents the signed-command/receipt trust boundary.
-- `docs/ENTERPRISE_TRANSFORMATION_PLAN.md`: architecture assessment, completed
-  slices, gaps, and ordered future work.
-- `local_agent/identity.py`: Ed25519 identity store and endpoint fingerprint.
-- `local_agent/command_verifier.py`: validates command ID, issued timestamp,
-  required parameters, expiry, target, operation, key ID, and Ed25519 signature.
-- `local_agent/storage.py`: `remote_command_receipts` and replay exception.
-- `local_agent/sync.py`: identity-bearing enrollment, central verification-key
-  pinning, signed-command verification/receipt before persistence.
-- `local_agent/main.py`: configures a durable identity-key path via
-  `VYPER_AGENT_IDENTITY_PATH` (otherwise alongside credentials).
-- `backend/app/routers/agents.py`: central command creation/delivery, identity
-  validation, organization/policy endpoints, approval state machine.
-- `backend/app/models.py`: organization, remote-policy, central-job-approval,
-  and additive organization/policy/approval fields.
-- `backend/app/schemas.py`: organization, policy, and policy-ID request models.
-- `backend/app/auth.py`: adds SUPER_ADMIN, SECURITY_ADMIN, and VIEWER roles.
-- `backend/app/routers/auth.py`, `audit_logs.py`, `security_events.py`: allows
-  appropriate new admin/read-only roles.
-- `backend/app/main.py`: production schema head now requires migration 0004.
-- `migrations/versions/0004_organization_policy_approvals.py`: forward-only
-  additive migration.
-- `tests/test_stage4_sync.py`: identity, signed delivery/replay, and approval
-  workflow regression cases.
-
-## Database changes
-
-Migration head is now `0004_organization_policy_approvals`.
-
-- New tables: `organizations`, `remote_policies`, `central_job_approvals`.
-- New nullable compatibility columns: `agents.organization_id`,
-  `agent_enrollment_tokens.organization_id`, `central_jobs.organization_id`,
-  `central_jobs.policy_id`, and `central_jobs.required_approvals`.
-- Existing records remain readable. A later migration should backfill an
-  explicitly chosen default organization only after product/upgrade policy is
-  decided; do not silently invent tenant ownership for production data.
-- The 0004 migration is forward-only. Take a tested backup before applying it.
-
-## API changes
-
-New central endpoints:
-
-- `POST /organizations` — create organization (SUPER_ADMIN/ADMIN).
-- `POST /organizations/{organization_id}/policies` — create remote policy
-  (security admin role).
-- `GET /organizations/{organization_id}/policies` — list policies.
-- `POST /central-jobs/{central_job_id}/approvals` — add a security approval.
-
-Changed contracts:
-
-- `POST /agents/enrollment-tokens` accepts optional `organization_id`.
-- `POST /agents/{agent_id}/jobs` accepts optional `policy_id`.
-- `GET /agent/jobs/next` includes `command`, a signed canonical command
-  envelope. A new agent must reject an assignment without this envelope.
-- Central job read records now include organization/policy/approval fields.
-
-## Agent changes
-
-- Add `VYPER_AGENT_IDENTITY_PATH` to deployment/installer configuration when
-  the desired key location is `/etc/vyper`; default is an `agent_identity.pem`
-  sibling of the credential file.
-- Credentials now include central command verification PEM/key ID. Do not print,
-  log, or place them in browser storage.
-- `CentralSyncClient.poll_job()` must be the only path that accepts remote
-  central jobs. It validates the signed command before `save_remote_request`.
-- Existing direct local jobs and boot handoff remain separate workflows.
-
-## Security decisions that must not be reversed
-
-- Never add arbitrary remote shell, executable, argv, or shell-fragment fields.
-- The central service cannot claim a wipe succeeded merely because it issued a
-  job; only verified agent evidence/certificate state can do that.
-- Do not bypass signature, target-agent, expiry, nonce, target identity, local
-  approval, or existing mounted/system-device safety validation.
-- Preserve outbound-only endpoint communication. Do not expose the local API to
-  the public internet.
-- Do not treat an offline device or disconnected result as verified.
-- Keep approval records append-only; do not turn an approval into a mutable
-  boolean flag.
-- Do not make central approvals replace fresh local authorization.
-
-## Tests and validation
+## Validation performed
 
 Passed:
 
-- `npm test` in `frontend/user-dashboard`: 26/26 dashboard contract tests.
-- AST syntax checks for the modified Python files.
-- `git diff --check`.
-
-Not run:
-
-- `python3 -m pytest tests -q` cannot run in the current environment because
-  its Python interpreter has neither `pytest` nor the pinned runtime modules
-  (including `cryptography`). No packages were installed automatically.
-
-After a developer-approved dependency setup, run:
-
-```bash
-python3 -m pip install -r requirements.lock pytest
-python3 -m pytest tests -q
-(cd frontend/user-dashboard && npm test && npm run lint && npm run build)
+```powershell
+python -m compileall backend\app\auth.py backend\app\models.py backend\app\routers\agents.py backend\app\schemas.py migrations\versions\0005_organization_memberships.py tests\test_stage4_sync.py
+git diff --check
+python -c "from sqlalchemy import create_engine, inspect; from backend.app.db import Base; import backend.app.models; engine=create_engine('sqlite:///.tmp/tenant-schema.db'); Base.metadata.create_all(engine); assert 'organization_memberships' in inspect(engine).get_table_names(); print('OK')"
 ```
 
-If installing needs network or changes a shared Python environment, use a
-project-local virtual environment and obtain approval first.
+The focused pytest suite could be invoked after providing a workspace-local
+`--basetemp`, but it cannot complete because the active Python interpreter does
+not have `cryptography`; enrollment/signing tests fail with
+`ModuleNotFoundError: No module named 'cryptography'`. This is an environment
+dependency failure, not an asserted test failure. Do not claim the suite passes
+until a project-local dependency environment is available.
 
-## Known issues and next steps
+`python -m alembic heads` also cannot run in this interpreter because Alembic
+is missing. The configured application head is nevertheless updated to
+`0007_remote_policy_lifecycle`.
 
-1. **Complete tenant isolation.** Organization IDs are carried through new
-   enrollment/job/policy paths, but all existing list/read/update endpoints are
-   not yet universally filtered by organization membership. Introduce explicit
-   organization membership/role records and make every central query scoped.
-2. **Finish policy lifecycle.** Add update/revoke/versioning, policy selection
-   defaults, device-category rules, verification-inconclusive disposition, and
-   a clear policy-evaluation record in command/evidence metadata.
-3. **Improve approval workflow.** Add explicit request/reject/cancel states,
-   expiry while awaiting approval, separate requester/approver identity in
-   development fixtures, two-person approval regression tests using real users,
-   and security-event records for request/approval/rejection/policy blocks.
-4. **Add endpoint security events.** Create an authenticated, typed outbound
-   endpoint event upload path for invalid signature, expiry, replay, identity
-   mismatch, storage change, and tamper events. Persist/retry it through the
-   outbox; never upload secrets.
-5. **Tamper and risk slice.** Implement a small configuration/key/inventory
-   tamper monitor and deterministic explainable risk factors. Fail closed for
-   unresolved identity anomalies.
-6. **Evidence/object storage.** Add S3-compatible object-storage metadata and
-   evidence-bundle upload/retry while retaining legacy JSON readability.
-7. **Dashboard.** Before editing `frontend/user-dashboard`, read its
-   `AGENTS.md`. Add device detail, policy, approval, security event, risk,
-   evidence, and certificate views using the real backend states only.
-8. **Docs/deployment.** Add the requested `SECURITY_ARCHITECTURE.md`,
-   `DEPLOYMENT.md`, `AGENT_INSTALLATION.md`, `REMOTE_SANITIZATION.md`, and
-   `API.md`; add Redis/MinIO/OIDC only when the vertical slice requires them.
-9. **Review migration 0004 on PostgreSQL and SQLite.** In particular, add
-   database-level foreign-key constraints/indexes for additive organization
-   columns where supported, and write a tested backfill procedure instead of
-   inferring tenant ownership.
-10. **Run full tests** in a dependency-equipped environment before claiming
-    production readiness.
+The legacy backend API contract suite passes with the workspace-local pytest
+base directory: `4 passed` (one existing Starlette/httpx deprecation warning).
 
-## Useful commands
+The membership lifecycle regression passes independently: `1 passed`.
 
-```bash
-# Central development API
-uvicorn backend.app.main:app --reload
+The latest pytest temporary directory (`.pytest-work`) could not be removed
+because Windows denied access after the run; it is disposable and is not a
+source change. Remove it when the lock clears before committing.
 
-# Local agent (Linux runtime)
-python3 -m local_agent.main
+## Next work, in priority order
 
-# Test suites
-python3 -m pytest tests -q
-(cd frontend/user-dashboard && npm test)
+1. Complete tenant scoping for audit logs and security events. These records
+   currently lack a reliable organization foreign key; add an additive field or
+   normalized correlation and write tenant-filtered reads. Do not infer tenancy
+   from mutable resource strings.
+2. Scope or explicitly classify the legacy local-only routes (`/jobs`,
+   `/assets`, `/results`, `/certificates`) before exposing them in a multi-tenant
+   central deployment. Their underlying legacy records currently have no
+   organization ownership, so non-global users should fail closed.
+3. Add membership removal/disable lifecycle and authorization rules that make
+   the stored membership role meaningful (currently role is recorded as
+   `OWNER`/`MEMBER`; global operator roles still decide action type).
+4. Run Alembic migration `0005` on SQLite and PostgreSQL using an approved
+   project-local dependency environment, then run the full tests with a local
+   pytest base temp directory.
+5. Continue the existing policy/approval lifecycle work: rejection/cancel,
+   approval expiry, real two-person/MFA tests, and security events.
 
-# Production migration and containers
-alembic upgrade head
-docker compose -f docker-compose.production.yml up --build
+## Security invariants retained
 
-# Build Linux release
-python3 packaging/build_release.py
-```
-
-## Git status
-
-Modified tracked files and new files are listed in the `Files changed` section.
-At handover creation, the worktree includes those intentional uncommitted
-changes only. Re-check with `git status --short --branch` before editing.
-
-## Safety notes
-
-VYPER can invoke destructive HDD overwrite, ATA secure erase, and NVMe sanitize
-through its existing typed local executor. Do not target a developer system disk
-or a mounted/ambiguous device. Automated destructive tests must use mocks,
-fixtures, loopback devices, or a disposable VM. Physical-hardware operations
-remain operator-gated and are documented under `docs/PHYSICAL_*`.
+- No remote shell, arbitrary executable, argv, or shell fragments.
+- Local independent approval remains required for destructive execution.
+- Signed command verification, nonce replay protection, target identity, and
+  mounted/system-disk safeguards remain unchanged.
+- No tenant member may read or act on a legacy null-organization central
+  resource; only the explicit global scope can access one.
+- Existing production migrations remain forward-only. Back up production data
+  before migration and do not backfill a default organization without an
+  explicit product/upgrade decision.
