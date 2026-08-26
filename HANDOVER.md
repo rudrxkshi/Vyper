@@ -1,5 +1,7 @@
 # VYPER handover — tenant isolation slice
 
+> Migration-status update: this branch history was subsequently combined with the central-certificate branch. The repository-wide supported head is `0009_merge_migration_heads`; head references below describe this slice when written.
+
 ## Date and checkout
 
 - Date: 2026-08-26 (Asia/Kolkata)
@@ -97,9 +99,9 @@ not have `cryptography`; enrollment/signing tests fail with
 dependency failure, not an asserted test failure. Do not claim the suite passes
 until a project-local dependency environment is available.
 
-`python -m alembic heads` also cannot run in this interpreter because Alembic
-is missing. The configured application head is nevertheless updated to
-`0007_remote_policy_lifecycle`.
+`python -m alembic heads` also could not run in that interpreter because
+Alembic was missing. At the time of this slice, the configured application head
+had been updated to `0007_remote_policy_lifecycle`; it is not the current repository head.
 
 The legacy backend API contract suite passes with the workspace-local pytest
 base directory: `4 passed` (one existing Starlette/httpx deprecation warning).

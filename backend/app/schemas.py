@@ -62,7 +62,9 @@ class CertificateRead(BaseModel):
 
     id: str | None = None
     certificate_id: str | None = None
-    job_id: str
+    job_id: str | None = None
+    central_job_id: str | None = None
+    local_job_id: str | None = None
     target: str
     final_status: str
     outcome_kind: str | None = None

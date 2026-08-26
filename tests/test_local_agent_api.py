@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from agent.agent import OrchestrationJobResult, _ObservableStateHistory
 from agent.common import JobState
 from agent.discovery import DiscoveredDevice
-from local_agent.jobs import result_payload
+from local_agent.jobs import LocalJobWorker, result_payload
 from local_agent.main import create_app
 from local_agent.storage import LocalJobStore
 
@@ -67,6 +67,24 @@ def test_terminal_payload_scopes_raw_execution_status(state, dry_run, terminal):
 	assert payload["execution_status_semantics"]["evidence.execution.status"] == "raw_pathway_historical"
 
 
+def test_terminal_payload_normalizes_cancelled_inconclusive_mismatch_without_losing_fields(tmp_path):
+	worker = LocalJobWorker(store=LocalJobStore(tmp_path / "terminal.db"), agent=object())
+	payload = {
+		"job_state": "CANCELLED", "final_status": "INCONCLUSIVE", "message": "Outcome is inconclusive.",
+		"profile": {"serial_number": "SER-TEST"}, "policy": {"selected_pathway": "HDD_OVERWRITE"},
+		"execution": {"status": "CANCELLED", "metadata": {"method": "HDD_OVERWRITE"}},
+		"verification": {"status": "INCONCLUSIVE", "verified": False},
+		"evidence": {"final_status": "INCONCLUSIVE", "integrity_hash": "fixture-hash"},
+		"certificate": {"successful_sanitization_claim": False}, "error": None,
+	}
+	original = json.loads(json.dumps(payload))
+	terminal = worker._terminal_payload(payload, dry_run=False)
+	assert terminal["job_state"] == terminal["final_status"] == "INCONCLUSIVE"
+	for field in ("message", "profile", "policy", "execution", "verification", "evidence", "certificate", "error"):
+		assert terminal[field] == original[field]
+	assert payload == original
+
+
 def _result(target, state="VERIFIED", *, method="HDD_OVERWRITE", dry_run=False, verified=True):
 	final_status = "VERIFIED" if state == "VERIFIED" else state
 	if state == "CANCELLED":
@@ -81,6 +99,9 @@ def _result(target, state="VERIFIED", *, method="HDD_OVERWRITE", dry_run=False, 
 		"verification": {"status": final_status, "verified": verified},
 		"evidence": {"final_status": final_status, "execution": {"status": "RUNNING"}},
 		"certificate": {
+			"certificate_id": f"cert-{final_status.lower()}",
+			"certificate_hash": "a" * 64,
+			"final_status": final_status,
 			"outcome_kind": "sanitization_certificate" if final_status == "VERIFIED" else "outcome_report",
 			"successful_sanitization_claim": final_status == "VERIFIED",
 			"execution": {"status": "RUNNING"},
@@ -172,6 +193,21 @@ def _submit(client, target="/dev/sdz", *, dry_run=True, password=None):
 	)
 
 
+def test_packaged_console_origin_has_credentialed_cors_access(tmp_path):
+	client, _, _ = _client(tmp_path)
+	response = client.options(
+		"/health",
+		headers={
+			"Origin": "http://127.0.0.1:8787",
+			"Access-Control-Request-Method": "GET",
+			"Access-Control-Request-Headers": "X-VYPER-API-Key",
+		},
+	)
+	assert response.status_code == 200
+	assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:8787"
+	assert response.headers["access-control-allow-credentials"] == "true"
+
+
 def test_health_devices_and_cors(tmp_path):
 	client, _agent, _executor = _client(tmp_path)
 	with client:
@@ -206,12 +242,12 @@ def test_lifecycle_events_are_durable_monotonic_and_dry_run_preserved(tmp_path):
 		executor.run_next()
 		job = client.get(f"/jobs/{accepted['local_job_id']}").json()
 		history = client.get("/jobs").json()
-	assert job["job_state"] == "CANCELLED"
+	assert job["job_state"] == "INCONCLUSIVE"
 	assert job["final_status"] == "INCONCLUSIVE"
 	assert [event["sequence"] for event in job["state_history"]] == list(range(1, len(job["state_history"]) + 1))
 	states = [event["state"] for event in job["state_history"]]
 	assert [state for index, state in enumerate(states) if index == 0 or state != states[index - 1]] == [
-		"PENDING", "PROFILING", "POLICY_SELECTED", "RUNNING", "VERIFYING", "CANCELLED"
+		"PENDING", "PROFILING", "POLICY_SELECTED", "RUNNING", "VERIFYING", "INCONCLUSIVE"
 	]
 	assert history[0]["local_job_id"] == accepted["local_job_id"]
 
@@ -234,6 +270,59 @@ def test_verified_requires_verified_result_and_other_terminals_persist(tmp_path)
 			executor.run_next()
 			job = client.get(f"/jobs/{accepted['local_job_id']}").json()
 		assert job["job_state"] == expected
+
+
+def test_local_certificate_api_projects_authoritative_job_certificates_without_duplicates(tmp_path):
+	client, _agent, executor = _client(tmp_path)
+	with client:
+		verified_id = _submit(client, dry_run=False).json()["local_job_id"]
+		executor.run_next()
+		first = client.get("/certificates").json()
+		second = client.get("/certificates").json()
+		verified_job = client.get(f"/jobs/{verified_id}").json()
+	assert first == second
+	assert len(first) == 1
+	certificate = first[0]
+	assert certificate["local_job_id"] == certificate["job_id"] == verified_id
+	assert certificate["certificate_id"] == verified_job["certificate"]["certificate_id"]
+	assert certificate["certificate_hash"] == verified_job["certificate"]["certificate_hash"]
+	assert certificate["certificate_json"] == verified_job["certificate"]
+	assert certificate["target"] == "/dev/sdz"
+	assert certificate["final_status"] == "VERIFIED"
+	assert certificate["outcome_kind"] == "sanitization_certificate"
+	assert certificate["successful_sanitization_claim"] is True
+
+
+def test_local_dry_run_outcome_report_is_not_presented_as_successful_certificate(tmp_path):
+	client, _agent, executor = _client(tmp_path)
+	with client:
+		job_id = _submit(client, dry_run=True).json()["local_job_id"]
+		executor.run_next()
+		certificates = client.get("/certificates").json()
+	assert len(certificates) == 1
+	assert certificates[0]["local_job_id"] == job_id
+	assert certificates[0]["final_status"] == "INCONCLUSIVE"
+	assert certificates[0]["outcome_kind"] == "outcome_report"
+	assert certificates[0]["successful_sanitization_claim"] is False
+
+
+def test_local_audit_api_projects_ordered_job_events_and_filters_unrelated_jobs(tmp_path):
+	client, _agent, _executor = _client(tmp_path)
+	with client:
+		store = client.app.state.job_store
+		store.create_job(local_job_id="local-a", api_version="2", target="/dev/sda", dry_run=True, authorization_metadata={})
+		store.transition("local-a", "PROFILING", "Profiling target device.")
+		store.transition("local-a", "POLICY_SELECTED", "Policy selected.")
+		store.create_job(local_job_id="local-b", api_version="2", target="/dev/sdb", dry_run=True, authorization_metadata={})
+		all_events = client.get("/audit-logs").json()
+		filtered = client.get("/audit-logs", params={"job_id": "local-a"}).json()
+	assert {event["local_job_id"] for event in all_events} == {"local-a", "local-b"}
+	assert [event["sequence"] for event in filtered] == [1, 2, 3]
+	assert [event["state"] for event in filtered] == ["PENDING", "PROFILING", "POLICY_SELECTED"]
+	assert all(event["local_job_id"] == "local-a" for event in filtered)
+	assert all(event["actor"] == "local-agent" for event in filtered)
+	assert all(event["resource"] == "local-job:local-a" for event in filtered)
+	assert all(not event["action"].startswith(("RESULT_ACCEPTED", "JOB_EVENT_ACCEPTED")) for event in filtered)
 
 
 def test_real_hdd_bytes_and_firmware_indeterminate_progress(tmp_path):

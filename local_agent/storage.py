@@ -388,6 +388,79 @@ class LocalJobStore:
 			).fetchall()
 		return [job for row in rows if (job := self.get_job(row["local_job_id"])) is not None]
 
+	def list_certificates(self, *, limit: int = 100) -> list[dict[str, Any]]:
+		certificates: list[dict[str, Any]] = []
+		with self._connect() as connection:
+			rows = connection.execute(
+				"""
+				SELECT local_job_id FROM local_jobs
+				WHERE certificate_json IS NOT NULL
+				ORDER BY created_at DESC LIMIT ?
+				""",
+				(max(1, min(int(limit), 500)),),
+			).fetchall()
+		for row in rows:
+			job = self.get_job(row["local_job_id"])
+			if job is None:
+				continue
+			certificate = job.get("certificate")
+			if not isinstance(certificate, dict) or not certificate:
+				continue
+			certificate_id = certificate.get("certificate_id")
+			certificates.append({
+				"id": f"local:{job['local_job_id']}:{certificate_id or 'outcome'}",
+				"certificate_id": certificate_id,
+				"job_id": job["local_job_id"],
+				"local_job_id": job["local_job_id"],
+				"target": job["target"],
+				"final_status": certificate.get("final_status"),
+				"outcome_kind": certificate.get("outcome_kind"),
+				"successful_sanitization_claim": certificate.get("successful_sanitization_claim") is True,
+				"certificate_hash": certificate.get("certificate_hash"),
+				"certificate_json": certificate,
+				"created_at": job.get("finished_at") or job["updated_at"],
+				"updated_at": job.get("updated_at"),
+			})
+		return certificates
+
+	def list_audit_events(self, *, local_job_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+		parameters: list[Any] = []
+		where = ""
+		if local_job_id:
+			where = "WHERE events.local_job_id = ?"
+			parameters.append(local_job_id)
+		parameters.append(max(1, min(int(limit), 1000)))
+		with self._connect() as connection:
+			rows = connection.execute(
+				f"""
+				SELECT events.local_job_id, events.sequence, events.state, events.timestamp,
+				events.message, events.progress_json, jobs.target, jobs.created_at
+				FROM local_job_events AS events
+				JOIN local_jobs AS jobs ON jobs.local_job_id = events.local_job_id
+				{where}
+				ORDER BY jobs.created_at DESC, events.sequence ASC
+				LIMIT ?
+				""",
+				parameters,
+			).fetchall()
+		return [{
+			"id": f"local:{row['local_job_id']}:{row['sequence']}",
+			"job_id": row["local_job_id"],
+			"local_job_id": row["local_job_id"],
+			"sequence": int(row["sequence"]),
+			"state": row["state"],
+			"action": f"LOCAL_JOB_{row['state']}",
+			"actor": "local-agent",
+			"target": row["target"],
+			"request_json": {
+				"sequence": int(row["sequence"]), "state": row["state"],
+				"message": row["message"], "progress": self._load(row["progress_json"]),
+			},
+			"response_json": {},
+			"resource": f"local-job:{row['local_job_id']}",
+			"created_at": row["timestamp"],
+		} for row in rows]
+
 	def save_remote_request(self, payload: dict[str, Any]) -> dict[str, Any]:
 		now = utc_now()
 		central_job_id = str(payload["central_job_id"])

@@ -222,6 +222,8 @@ class LocalJobWorker:
 		verification = payload.get("verification") if isinstance(payload.get("verification"), dict) else None
 		state = str(payload.get("job_state") or "FAILED")
 		final_status = str((evidence or {}).get("final_status") or payload.get("final_status") or state)
+		if state in TERMINAL_STATES and final_status in TERMINAL_STATES and state != final_status:
+			state = final_status
 		verified_claim = (
 			state == "VERIFIED"
 			and final_status == "VERIFIED"

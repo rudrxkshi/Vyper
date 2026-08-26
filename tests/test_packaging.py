@@ -7,6 +7,7 @@ import os
 import shutil
 import sqlite3
 import stat
+import subprocess
 import tarfile
 import tomllib
 from types import SimpleNamespace
@@ -30,6 +31,13 @@ ARTIFACT = RELEASE / f"vyper-local-console-linux-x86_64-{__version__}.tar.gz"
 
 def _load_installer():
 	spec = importlib.util.spec_from_file_location("vyper_installer", ROOT / "packaging" / "linux" / "installer.py")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def _load_build_release():
+	spec = importlib.util.spec_from_file_location("vyper_build_release", ROOT / "packaging" / "build_release.py")
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
@@ -123,7 +131,17 @@ def test_fresh_install_fixture_initializes_runtime_state_and_all_cli_wrappers(tm
 		assert wrapper.is_file() and f"/opt/vyper/runtime/bin/{command}" in wrapper.read_text(encoding="utf-8")
 	assert (rootfs / "opt/vyper/ui/index.html").read_text(encoding="utf-8") == "VYPER"
 	assert (rootfs / "etc/vyper/config.toml").is_file()
-	assert not (rootfs / "etc/vyper/agent-identity.json").exists()
+	credential = rootfs / "etc/vyper/agent-identity.json"
+	assert credential.is_file() and credential.read_bytes() == b""
+	assert stat.S_IMODE(credential.stat().st_mode) == 0o600 or os.name == "nt"
+	assert stat.S_IMODE((rootfs / "etc/vyper").stat().st_mode) == 0o750 or os.name == "nt"
+	store = AgentCredentialStore(credential)
+	store.save({"agent_id": "agent-test", "agent_token": "fixture-secret", "agent_protocol_version": "1"})
+	assert store.load() == {"agent_id": "agent-test", "agent_token": "fixture-secret", "agent_protocol_version": "1"}
+	install_script = (ROOT / "packaging/linux/install.sh").read_text(encoding="utf-8")
+	assert 'chown vyper-agent:vyper-executor "$etc/agent-identity.json"' in install_script
+	assert 'chmod 0600 "$etc/agent-identity.json"' in install_script
+	assert 'chmod 0750 "$etc"' in install_script
 
 
 def test_upgrade_preserves_jobs_outbox_correlation_evidence_and_operator_state(tmp_path):
@@ -203,7 +221,11 @@ def test_systemd_units_enforce_loopback_unprivileged_ui_and_no_shell_service():
 	assert 'local_console_bind = "127.0.0.1"' in config
 	executor = (ROOT / "packaging/linux/systemd/vyper-executor.service").read_text(encoding="utf-8")
 	assert "User=vyper-agent" in agent and "VYPER_EXECUTOR_SOCKET" in agent
-	assert "User=root" in executor and "RestrictAddressFamilies=AF_UNIX" in executor
+	assert "User=root" in executor and "Group=vyper-executor" in executor
+	assert "RuntimeDirectory=vyper" in executor and "RuntimeDirectoryMode=0750" in executor
+	assert "RestrictAddressFamilies=AF_UNIX" in executor
+	assert "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN" in executor
+	assert "AmbientCapabilities=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN" in executor
 	assert "User=vyper-ui" in console and "User=root" not in console
 	assert "/bin/sh" not in agent and "/bin/bash" not in agent
 	assert "vyper-local-agent" in agent and "NoNewPrivileges=yes" in agent
@@ -281,3 +303,35 @@ def test_artifact_excludes_forbidden_development_and_secret_files():
 		parts = set(Path(member.name).parts)
 		assert not (parts & forbidden_parts)
 		assert not member.name.endswith((".db", ".pyc", ".map"))
+
+
+def test_local_static_export_gate_requires_collection_endpoints_and_records_build_mode(tmp_path):
+	export = tmp_path / "out"
+	chunks = export / "_next" / "static" / "chunks"
+	chunks.mkdir(parents=True)
+	(export / "index.html").write_text("<html>VYPER</html>", encoding="utf-8")
+	(chunks / "app.js").write_text(
+		'const api="http://127.0.0.1:8765"; fetch(api+"/certificates"); fetch(api+"/audit-logs");',
+		encoding="utf-8",
+	)
+	metadata = _load_build_release().verify_local_frontend_export(export)
+	payload = json.loads(metadata.read_text(encoding="utf-8"))
+	assert payload == {
+		"dashboard_mode": "local",
+		"local_agent_api_base_url": "http://127.0.0.1:8765",
+		"required_collections": ["/certificates", "/audit-logs"],
+	}
+
+
+def test_runtime_sqlite_artifacts_are_ignored_and_not_tracked():
+	ignored = set((ROOT / ".gitignore").read_text(encoding="utf-8").splitlines())
+	assert {"backend/vyper.db", "backend/vyper.db-wal", "backend/vyper.db-shm"} <= ignored
+	tracked = subprocess.run(
+		["git", "ls-files", "--", "*.db", "*.db-wal", "*.db-shm", "*.sqlite", "*.sqlite3"],
+		cwd=ROOT, check=True, capture_output=True, text=True,
+	).stdout.splitlines()
+	assert tracked == []
+	tracked_bytecode = subprocess.run(
+		["git", "ls-files", "--", "*.pyc"], cwd=ROOT, check=True, capture_output=True, text=True,
+	).stdout.splitlines()
+	assert tracked_bytecode == []

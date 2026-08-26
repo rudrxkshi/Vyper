@@ -95,13 +95,13 @@ def create_app(
 	app = FastAPI(title="VYPER Local Agent API", version=API_VERSION, lifespan=lifespan)
 	configured_origins = os.getenv(
 		"VYPER_LOCAL_AGENT_CORS_ORIGINS",
-		"http://127.0.0.1:3000,http://localhost:3000",
+		"http://127.0.0.1:8787,http://localhost:8787,http://127.0.0.1:3000,http://localhost:3000",
 	)
 	allowed_origins = [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
 	app.add_middleware(
 		CORSMiddleware,
 		allow_origins=allowed_origins,
-		allow_credentials=False,
+		allow_credentials=True,
 		allow_methods=["GET", "POST"],
 		allow_headers=["Content-Type", "X-VYPER-API-Key"],
 	)
@@ -220,6 +220,17 @@ def create_app(
 		if job is None:
 			raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Local job not found.")
 		return job
+
+	@app.get("/certificates", tags=["certificates"], dependencies=[Depends(_require_local_api_key)])
+	def list_certificates(limit: int = Query(default=100, ge=1, le=500)):
+		return store().list_certificates(limit=limit)
+
+	@app.get("/audit-logs", tags=["audit"], dependencies=[Depends(_require_local_api_key)])
+	def list_audit_logs(
+		job_id: str | None = None,
+		limit: int = Query(default=500, ge=1, le=1000),
+	):
+		return store().list_audit_events(local_job_id=job_id, limit=limit)
 
 	@app.post(
 		"/jobs/{local_job_id}/cancel",

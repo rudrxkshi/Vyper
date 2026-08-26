@@ -28,9 +28,9 @@ jobs:
         env: {VYPER_DATABASE_URL: "sqlite:///stage6-migration.db"}
       - run: alembic upgrade head
         env: {VYPER_DATABASE_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"}
-      - run: pytest -p no:cacheprovider
+      - run: python -m pytest -p no:cacheprovider
         env: {VYPER_TEST_POSTGRES_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"}
-      - run: pytest tests/test_stage7_boot_sanitize.py tests/test_stage8_release_candidate.py -p no:cacheprovider
+      - run: python -m pytest tests/test_stage7_boot_sanitize.py tests/test_stage8_release_candidate.py -p no:cacheprovider
       - run: pip-audit -r requirements.lock -r requirements-central.lock
       - run: python scripts/postgres-validation.py
         env: {VYPER_TEST_POSTGRES_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"}
@@ -71,7 +71,7 @@ jobs:
       - run: npm audit --audit-level=high
         working-directory: frontend/user-dashboard
       - run: python -m pytest tests/test_stage13_security.py tests/test_stage14_release_freeze.py -p no:cacheprovider
-      - run: pytest tests/test_packaging.py tests/test_stage7_boot_sanitize.py tests/test_stage8_release_candidate.py -p no:cacheprovider
+      - run: python -m pytest tests/test_packaging.py tests/test_stage7_boot_sanitize.py tests/test_stage8_release_candidate.py -p no:cacheprovider
       - run: git diff --check
 
   containers:

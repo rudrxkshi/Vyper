@@ -57,12 +57,14 @@ def _auth(enrollment):
 	return {"Authorization": f"Bearer {enrollment['agent_token']}"}
 
 
-def _device(path="/dev/sdb", *, serial="SER-1", system=False):
+def _device(path="/dev/sdb", *, serial="SER-1", system=False, mounted=False, eligible=None):
+	if eligible is None:
+		eligible = not system and not mounted
 	return {
 		"device_path": path, "device_type": "HDD", "model": "Mock Disk", "serial_number": serial,
 		"size_bytes": 1000, "interface": "ATA/SATA", "transport": "SATA", "rotational": True,
-		"mounted": False, "mounted_partitions": [], "is_system_device": system,
-		"capabilities": {}, "warnings": [], "profile_error": None, "eligible_for_sanitization": not system,
+		"mounted": mounted, "mounted_partitions": [], "is_system_device": system,
+		"capabilities": {}, "warnings": [], "profile_error": None, "eligible_for_sanitization": eligible,
 	}
 
 
@@ -531,15 +533,24 @@ def _verified_result(local_job_id="local-1"):
 
 def test_final_result_is_structurally_checked_correlated_and_idempotent(tmp_path):
 	with _central_client(tmp_path) as client:
-		_enrolled, headers, _asset, job = _prepare_agent_asset_job(client, dry_run=True)
+		_enrolled, headers, _asset, job = _prepare_agent_asset_job(client, dry_run=False)
 		payload = _verified_result()
 		first = client.post(f"/agent/jobs/{job['central_job_id']}/result", headers=headers, json=payload)
 		duplicate = client.post(f"/agent/jobs/{job['central_job_id']}/result", headers=headers, json=payload)
 		stored = client.get("/central-jobs").json()[0]
+		certificates = client.get("/certificates").json()
 	assert first.status_code == 200
 	assert duplicate.json()["duplicate"] is True
 	assert stored["local_job_id"] == "local-1"
 	assert stored["final_status"] == "VERIFIED"
+	assert len(certificates) == 1
+	assert certificates[0]["central_job_id"] == job["central_job_id"]
+	assert certificates[0]["local_job_id"] == payload["local_job_id"]
+	assert certificates[0]["certificate_id"] == payload["certificate"]["certificate_id"]
+	assert certificates[0]["certificate_hash"] == payload["certificate"]["certificate_hash"]
+	assert certificates[0]["certificate_json"] == payload["certificate"]
+	assert certificates[0]["outcome_kind"] == "sanitization_certificate"
+	assert certificates[0]["successful_sanitization_claim"] is True
 
 
 def test_bad_integrity_is_quarantined_and_revoked_agent_cannot_upload(tmp_path):
@@ -582,9 +593,41 @@ def test_non_verified_terminal_results_persist_without_success_claim(tmp_path, f
 		payload["certificate"] = {"successful_sanitization_claim": False}
 		response = client.post(f"/agent/jobs/{job['central_job_id']}/result", headers=headers, json=payload)
 		stored = client.get("/central-jobs").json()[0]
+		certificates = client.get("/certificates").json()
 	assert response.status_code == 200
 	assert stored["final_status"] == final_status
 	assert stored["result"]["certificate"]["successful_sanitization_claim"] is False
+	assert certificates == []
+
+
+def test_destructive_remote_job_requires_currently_eligible_asset_but_inventory_remains_complete(tmp_path):
+	with _central_client(tmp_path) as client:
+		enrolled = _enroll(client).json()
+		headers = _auth(enrolled)
+		devices = [
+			_device("/dev/sda", serial="SYSTEM", system=True),
+			_device("/dev/sdc", serial="MOUNTED", mounted=True, eligible=True),
+			_device("/dev/sdd", serial="INELIGIBLE", eligible=False),
+			_device("/dev/sdb", serial="ELIGIBLE"),
+		]
+		assert client.put("/agent/inventory", headers=headers, json=_inventory(devices)).status_code == 200
+		assets = client.get(f"/agents/{enrolled['agent_id']}/assets").json()
+		by_path = {asset["device_path"]: asset for asset in assets}
+		def submit(path, key):
+			return client.post(f"/agents/{enrolled['agent_id']}/jobs", json={
+				"asset_id": by_path[path]["id"], "dry_run": False, "central_authorized": True,
+				"destructive_confirmation": "SANITIZE", "idempotency_key": key,
+				"expires_in_seconds": 3600, "execution_mode": "normal_local",
+			})
+		system = submit("/dev/sda", "system-rejected")
+		mounted = submit("/dev/sdc", "mounted-rejected")
+		ineligible = submit("/dev/sdd", "ineligible-rejected")
+		eligible = submit("/dev/sdb", "eligible-accepted")
+	assert len(assets) == 4
+	assert system.status_code == 422
+	assert mounted.status_code == 422
+	assert ineligible.status_code == 422
+	assert eligible.status_code == 201
 
 
 def test_certificate_hash_mismatch_is_quarantined(tmp_path):
@@ -655,6 +698,37 @@ def test_local_credential_permissions_and_offline_outbox_retry(tmp_path):
 	assert sync.flush_outbox() == 1
 	assert restarted.due_outbox(now="9999-12-31T00:00:00Z") == []
 	assert "never-log-this" not in json.dumps(restarted.due_outbox(now="9999-12-31T00:00:00Z"))
+
+
+def test_queued_job_result_payload_and_outbox_share_result_idempotency_key(tmp_path):
+	store = LocalJobStore(tmp_path / "local.db")
+	local_job_id = "local-result-1"
+	central_job_id = "central-result-1"
+	store.create_job(local_job_id=local_job_id, api_version="2", target="/dev/mock", dry_run=True,
+		authorization_metadata={"approved": False})
+	store.complete(local_job_id, {
+		"job_state": "INCONCLUSIVE", "final_status": "INCONCLUSIVE", "message": "Dry run complete.",
+		"progress": None, "profile": {}, "policy": {}, "execution": {}, "verification": {},
+		"evidence": {"final_status": "INCONCLUSIVE"}, "certificate": {"successful_sanitization_claim": False},
+		"error": None,
+	})
+	store.save_remote_request({
+		"central_job_id": central_job_id, "target_identity": "fixture-identity", "requested_target": "/dev/mock",
+		"dry_run": True, "authorization_policy": {"central_approved": False},
+		"expires_at": "2999-01-01T00:00:00Z", "idempotency_key": "remote-result-1", "nonce": "fixture-nonce",
+	})
+	assert store.map_remote_job(central_job_id, local_job_id, local_approved=False) is True
+	credential_store = AgentCredentialStore(tmp_path / "credential.json")
+	credential_store.save({"agent_id": "agent-1", "agent_token": "fixture-token", "agent_protocol_version": "1"})
+	sync = CentralSyncClient(
+		central_url="http://central.test", credential_store=credential_store, job_store=store,
+		discovery=DiscoveryStub([]), submit_local_job=lambda **kwargs: local_job_id,
+	)
+	assert sync.queue_job_updates() > 0
+	result = next(item for item in store.due_outbox(now="9999-12-31T00:00:00Z") if item["kind"] == "job_result")
+	expected = f"result:{central_job_id}"
+	assert result["idempotency_key"] == expected
+	assert result["payload"]["idempotency_key"] == expected
 
 
 def test_remote_destructive_request_requires_local_approval_and_revalidates_identity(tmp_path):

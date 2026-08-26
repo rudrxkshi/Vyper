@@ -18,6 +18,7 @@ import {
 } from "../lib/api.mjs";
 import {
   auditLogView,
+  auditLogsForJob,
   certificateView,
   filterAssets,
   filterAuditLogs,
@@ -29,9 +30,22 @@ import {
   normalizeDiscoveredDevices,
   normalizeCentralJob,
   normalizeLocalJob,
+  remoteAssetsForJob,
   normalizeRemoteAgent,
   shouldPollLocalJob,
 } from "../lib/presentation.mjs";
+import { loadLocalConsoleData } from "../lib/local-console-data.mjs";
+
+test("central job detail associates null-job-id audits by central resource while preserving legacy lookup", () => {
+  const audits = [
+    { id: "central-audit", job_id: null, resource: "central-job:central-1", action: "RESULT_ACCEPTED" },
+    { id: "other-central", job_id: null, resource: "central-job:central-2", action: "RESULT_ACCEPTED" },
+    { id: "legacy-audit", job_id: "legacy-1", resource: "job:legacy-1", action: "JOB_COMPLETED" },
+  ];
+  const central = normalizeCentralJob({ central_job_id: "central-1", requested_target: "/dev/sdb" });
+  assert.deepEqual(auditLogsForJob(central, audits).map((entry) => entry.id), ["central-audit"]);
+  assert.deepEqual(auditLogsForJob({ id: "legacy-1" }, audits).map((entry) => entry.id), ["legacy-audit"]);
+});
 
 test("sanitize request matches the backend SanitizeJobCreate shape", async () => {
   const form = {
@@ -238,6 +252,22 @@ test("an explicitly ineligible discovery record is not treated as safe", () => {
   assert.match(protection.reason, /did not establish/i);
 });
 
+test("destructive remote selector excludes unsafe assets without changing inventory", () => {
+  const assets = [
+    { id: "system", device_path: "/dev/sda", profile_json: { is_system_device: true, mounted: true, eligible_for_sanitization: false } },
+    { id: "mounted", device_path: "/dev/sdc", profile_json: { is_system_device: false, mounted: true, eligible_for_sanitization: true } },
+    { id: "ineligible", device_path: "/dev/sdd", profile_json: { is_system_device: false, mounted: false, eligible_for_sanitization: false } },
+    { id: "eligible", device_path: "/dev/sdb", profile_json: { is_system_device: false, mounted: false, eligible_for_sanitization: true } },
+  ];
+
+  assert.deepEqual(
+    remoteAssetsForJob(assets, { dryRun: false, executionMode: "normal_local" }).map((asset) => asset.id),
+    ["eligible"],
+  );
+  assert.equal(remoteAssetsForJob(assets, { dryRun: true, executionMode: "normal_local" }).length, 4);
+  assert.equal(assets.length, 4);
+});
+
 test("local agent job responses normalize into dashboard records", () => {
   const job = normalizeLocalJob({
     api_version: "1",
@@ -323,6 +353,55 @@ test("local-mode client rejects a central service identity", async () => {
   });
 
   assert.equal(await checkBackendConnection(client), false);
+});
+
+test("local console reads certificate and lifecycle projections from local endpoints", async () => {
+  const requestedUrls = [];
+  const client = createApiClient({
+    baseUrl: "http://127.0.0.1:8765",
+    expectedService: "local-agent",
+    fetchImpl: async (url) => {
+      requestedUrls.push(url);
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  assert.deepEqual(await client.listCertificates(), []);
+  assert.deepEqual(await client.listAuditLogs(), []);
+  assert.deepEqual(requestedUrls, [
+    "http://127.0.0.1:8765/certificates",
+    "http://127.0.0.1:8765/audit-logs",
+  ]);
+});
+
+test("populated local certificate and audit arrays survive the dashboard loading boundary", async () => {
+  const certificate = { id: "local:job-1:cert-1", certificate_id: "cert-1", local_job_id: "job-1" };
+  const audit = { id: "local:job-1:1", local_job_id: "job-1", sequence: 1, action: "LOCAL_JOB_PENDING" };
+  const localData = await loadLocalConsoleData({
+    listDevices: async () => [],
+    listJobs: async () => [],
+    listCertificates: async () => [certificate],
+    listAuditLogs: async () => [audit],
+    listRemoteJobs: async () => [],
+    getSyncStatus: async () => ({ configured: false }),
+  });
+
+  assert.deepEqual(localData.certificates, [certificate]);
+  assert.deepEqual(localData.auditLogs, [audit]);
+});
+
+test("local collection loader rejects central-style wrapper objects", async () => {
+  await assert.rejects(() => loadLocalConsoleData({
+    listDevices: async () => [],
+    listJobs: async () => [],
+    listCertificates: async () => ({ items: [] }),
+    listAuditLogs: async () => [],
+    listRemoteJobs: async () => [],
+    getSyncStatus: async () => ({}),
+  }), /certificates response must be a JSON array/i);
 });
 
 test("central remote jobs use an agent-owned synchronized asset contract", async () => {

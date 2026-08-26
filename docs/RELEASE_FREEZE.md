@@ -6,7 +6,7 @@ Expected release tag: annotated tag `v1.0.0-rc1` on the final reviewed release c
 Freeze preparation timestamp: `2026-08-26T00:00:00+05:30`  
 Supported package platform: Linux x86_64; Ubuntu is the validated build/boot environment and Debian is compatible but not equivalently boot-validated.
 
-Frozen interfaces are Local API v2, agent protocol v1, privileged-executor protocol v1, boot-manifest schema v1, evidence structural schema v1, certificate schema `1.0.0`, local job-store schema 2, and Alembic head `0002_stage13_mfa_sessions` after `0001_stage6_baseline`.
+Frozen interfaces are Local API v2, agent protocol v1, privileged-executor protocol v1, boot-manifest schema v1, evidence structural schema v1, certificate schema `1.0.0`, local job-store schema 2, and Alembic head `0009_merge_migration_heads`.
 
 The source baseline above was dirty while Stage 14 was prepared. The release manager must review and commit the complete RC tree, record that resulting commit in release records, build from a clean checkout, and place `v1.0.0-rc1` on that exact commit. Do not modify sanitization code after the freeze except for a documented release-blocking correctness or security defect. Do not tag or push automatically.
 

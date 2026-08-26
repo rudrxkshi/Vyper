@@ -12,10 +12,14 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
 
 from backend.app.db import default_database_url
-from backend.app.main import create_app
-from backend.app.models import AgentAssetRecord, AgentRecord, AuditLogRecord, OperatorSessionRecord, UserRecord
+from backend.app.main import SUPPORTED_ALEMBIC_HEAD, create_app
+from backend.app.models import (
+	AgentAssetRecord, AgentRecord, AuditLogRecord, OperatorSessionRecord,
+	OrganizationMembershipRecord, OrganizationRecord, UserRecord,
+)
 from backend.app.security import hash_password, verify_audit_chain
 from local_agent.cli import verify_package
 from local_agent.process_worker import ProcessJobExecutor
@@ -66,17 +70,23 @@ def test_operator_can_request_but_auditor_cannot_and_confirmation_is_required(tm
 	monkeypatch.setenv("VYPER_DEV_ANONYMOUS_OPERATOR", "false")
 	app = create_app(database_url=f"sqlite:///{tmp_path / 'rbac.db'}")
 	with TestClient(app) as client:
-		_user(app, "operator", "OPERATOR")
+		operator_id = _user(app, "operator", "OPERATOR")
 		_user(app, "auditor", "AUDITOR")
 		now = datetime.now(timezone.utc)
 		with app.state.session_factory() as db:
+			organization = OrganizationRecord(id=str(uuid4()), name="Stage 6 organization")
+			membership = OrganizationMembershipRecord(
+				id=str(uuid4()), organization_id=organization.id, user_id=operator_id, role="MEMBER",
+			)
 			agent = AgentRecord(agent_id=str(uuid4()), display_name="Agent", hostname="host", platform="linux",
 				architecture="x86_64", agent_version="1", api_version="2", agent_protocol_version="1",
-				status="ONLINE", enrolled_at=now, metadata_json={}, token_hash="a" * 64)
+				status="ONLINE", enrolled_at=now, metadata_json={}, token_hash="a" * 64,
+				organization_id=organization.id)
 			asset = AgentAssetRecord(id=str(uuid4()), agent_id=agent.agent_id, hardware_identity="b" * 64,
-				identity_confidence="HIGH", device_path="/dev/mock", device_type="HDD", profile_json={},
+				identity_confidence="HIGH", device_path="/dev/mock", device_type="HDD",
+				profile_json={"is_system_device": False, "mounted": False, "eligible_for_sanitization": True},
 				observations_json=[], first_seen_at=now, last_seen_at=now)
-			db.add_all([agent, asset]); db.commit()
+			db.add_all([organization, membership, agent, asset]); db.commit()
 			agent_id, asset_id = agent.agent_id, asset.id
 		_login(client, "auditor")
 		payload = {"asset_id": asset_id, "dry_run": False, "central_authorized": True,
@@ -143,9 +153,50 @@ def test_alembic_upgrades_empty_database_and_records_revision(tmp_path):
 	engine = create_engine(f"sqlite:///{database}")
 	with engine.connect() as connection:
 		tables = set(inspect(connection).get_table_names())
+		version_column = next(column for column in inspect(connection).get_columns("alembic_version")
+			if column["name"] == "version_num")
 		revision = connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
 	assert {"users", "operator_sessions", "central_jobs", "audit_logs"}.issubset(tables)
-	assert revision == "0002_stage13_mfa_sessions"
+	assert revision == SUPPORTED_ALEMBIC_HEAD
+	assert version_column["type"].length == 32
+
+
+@pytest.mark.parametrize("starting_revision", [
+	None,
+	"0002_stage13_mfa_sessions",
+	"0003_remote_command_identity",
+	"0003_central_certificates",
+])
+def test_postgresql_upgrade_paths_use_wide_version_table_when_ci_database_is_available(starting_revision):
+	url = os.getenv("VYPER_TEST_POSTGRES_URL")
+	if not url:
+		pytest.skip("PostgreSQL integration database is provided by CI.")
+	schema = f"vyper_migration_{uuid4().hex}"
+	admin_engine = create_engine(url)
+	with admin_engine.begin() as connection:
+		connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+	test_url = make_url(url).update_query_dict({"options": f"-csearch_path={schema}"})
+	config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+	config.set_main_option("sqlalchemy.url", test_url.render_as_string(hide_password=False).replace("%", "%%"))
+	try:
+		if starting_revision:
+			command.upgrade(config, starting_revision)
+			engine = create_engine(test_url)
+			with engine.begin() as connection:
+				connection.exec_driver_sql(
+					"ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(32)"
+				)
+		command.upgrade(config, "head")
+		engine = create_engine(test_url)
+		with engine.connect() as connection:
+			revision = connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
+			version_column = next(column for column in inspect(connection).get_columns("alembic_version")
+				if column["name"] == "version_num")
+		assert revision == "0009_merge_migration_heads"
+		assert version_column["type"].length >= 64
+	finally:
+		with admin_engine.begin() as connection:
+			connection.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')
 
 
 def test_postgresql_transaction_rollback_when_ci_database_is_available():
@@ -156,8 +207,9 @@ def test_postgresql_transaction_rollback_when_ci_database_is_available():
 	username = f"rollback-{uuid4()}"
 	with engine.connect() as connection:
 		transaction = connection.begin()
-		connection.execute(text("INSERT INTO users (id, username, display_name, password_hash, role, password_changed_at) "
-			"VALUES (:id, :username, 'Rollback', 'not-a-real-password-hash', 'AUDITOR', :changed)"),
+		connection.execute(text("INSERT INTO users (id, username, display_name, password_hash, role, password_changed_at, "
+			"mfa_enabled, mfa_recovery_codes_json) VALUES (:id, :username, 'Rollback', "
+			"'not-a-real-password-hash', 'AUDITOR', :changed, false, CAST('[]' AS JSON))"),
 			{"id": str(uuid4()), "username": username, "changed": datetime.now(timezone.utc)})
 		transaction.rollback()
 		assert connection.execute(text("SELECT count(*) FROM users WHERE username = :username"), {"username": username}).scalar_one() == 0

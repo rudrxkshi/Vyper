@@ -29,7 +29,7 @@ from .routers.jobs import router as jobs_router
 from .routers.results import router as results_router
 from .routers.security_events import router as security_events_router
 
-SUPPORTED_ALEMBIC_HEAD = "0007_remote_policy_lifecycle"
+SUPPORTED_ALEMBIC_HEAD = "0009_merge_migration_heads"
 
 
 def require_supported_schema(engine) -> None:

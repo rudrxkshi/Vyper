@@ -25,7 +25,7 @@ from ..auth import OperatorPrincipal, OperatorRole, organization_ids, require_or
 from ..command_signing import command_public_key_id, command_public_key_pem, sign_command
 from ..db import get_db
 from ..models import (
-	AgentAssetRecord, AgentRecord, CentralJobApprovalRecord, CentralJobEventRecord, CentralJobRecord,
+	AgentAssetRecord, AgentRecord, CentralCertificateRecord, CentralJobApprovalRecord, CentralJobEventRecord, CentralJobRecord,
 	EnrollmentTokenRecord, OrganizationMembershipRecord, OrganizationRecord, RemotePolicyRecord, UserRecord,
 )
 from ..schemas import (
@@ -54,6 +54,28 @@ _TERMINAL = {"VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"}
 _OPERATOR_READ = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR, OperatorRole.AUDITOR, OperatorRole.VIEWER)
 _OPERATOR_WRITE = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR)
 _SECURITY_APPROVER = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN)
+
+
+def _index_accepted_sanitization_certificate(db: Session, job: CentralJobRecord, result: dict[str, Any]) -> None:
+	certificate = result.get("certificate") or {}
+	if not (
+		result.get("final_status") == "VERIFIED"
+		and certificate.get("outcome_kind") == "sanitization_certificate"
+		and certificate.get("successful_sanitization_claim") is True
+	):
+		return
+	if db.scalar(select(CentralCertificateRecord.id).where(CentralCertificateRecord.central_job_id == job.central_job_id)):
+		return
+	device = certificate.get("device") or {}
+	db.add(CentralCertificateRecord(
+		id=str(uuid4()), central_job_id=job.central_job_id,
+		local_job_id=str(result.get("local_job_id") or job.local_job_id),
+		certificate_id=certificate["certificate_id"],
+		target=str(device.get("device_path") or job.requested_target),
+		final_status=certificate["final_status"], certificate_hash=certificate["certificate_hash"],
+		outcome_kind=certificate["outcome_kind"], successful_sanitization_claim=True,
+		certificate_json=certificate,
+	))
 
 
 def _iso(value):
@@ -575,14 +597,19 @@ def create_central_job(agent_id: str, payload: CentralJobCreate, principal: Oper
 		raise HTTPException(status_code=403, detail="The selected policy blocks system-disk sanitization.")
 	if payload.execution_mode == "boot_sanitize" and (asset.profile_json or {}).get("is_system_device") is not True:
 		raise HTTPException(status_code=422, detail="Boot sanitization requires a synchronized system-disk asset.")
-	if payload.execution_mode == "normal_local" and (asset.profile_json or {}).get("is_system_device") is True and not payload.dry_run:
-		raise HTTPException(status_code=422, detail="A system disk cannot use normal local destructive execution mode.")
 	if not payload.dry_run and not payload.central_authorized:
 		raise HTTPException(status_code=403, detail="Central destructive authorization is required.")
 	if not payload.dry_run and payload.destructive_confirmation != "SANITIZE":
 		raise HTTPException(status_code=422, detail="Destructive confirmation must exactly equal SANITIZE.")
 	if not payload.dry_run and not principal.development_identity and principal.mfa_assurance not in {"TOTP", "RECOVERY"}:
 		raise HTTPException(status_code=403, detail="An MFA-authenticated operator session is required for destructive central jobs.")
+	profile = asset.profile_json or {}
+	if payload.execution_mode == "normal_local" and not payload.dry_run and (
+		profile.get("is_system_device") is True
+		or profile.get("mounted") is not False
+		or profile.get("eligible_for_sanitization") is not True
+	):
+		raise HTTPException(status_code=422, detail="The synchronized asset is not currently eligible for destructive sanitization.")
 	existing = db.execute(
 		select(CentralJobRecord).where(CentralJobRecord.agent_id == agent_id, CentralJobRecord.idempotency_key == payload.idempotency_key)
 	).scalar_one_or_none()
@@ -630,7 +657,9 @@ def approve_central_job(central_job_id: str, payload: CentralJobApprovalDecision
 	if job is None:
 		raise HTTPException(status_code=404, detail="Central job not found.")
 	require_organization_access(db, principal, job.organization_id)
-	if job.expires_at <= utc_now():
+	now = utc_now()
+	expires_at = job.expires_at.replace(tzinfo=job.expires_at.tzinfo or now.tzinfo)
+	if expires_at <= now:
 		job.status = "EXPIRED"
 		job.final_status = "EXPIRED"
 		job.updated_at = utc_now()
@@ -810,6 +839,8 @@ def upload_result(central_job_id: str, payload: AgentJobResultUpload, agent: Age
 	require_protocol(payload.agent_protocol_version)
 	job = _owned_job(db, central_job_id, agent)
 	if job.result_idempotency_key == payload.idempotency_key and job.result_json is not None:
+		_index_accepted_sanitization_certificate(db, job, job.result_json)
+		db.commit()
 		return {"accepted": True, "duplicate": True, "central_job_id": central_job_id, "final_status": job.final_status}
 	if job.result_json is not None and job.result_idempotency_key != payload.idempotency_key:
 		raise HTTPException(status_code=409, detail="A final result already exists with a different idempotency key.")
@@ -844,6 +875,7 @@ def upload_result(central_job_id: str, payload: AgentJobResultUpload, agent: Age
 	job.finished_at = utc_now()
 	job.updated_at = job.finished_at
 	job.integrity_status = "VALID" if evidence.get("integrity_hash") or certificate.get("certificate_hash") else "NOT_PROVIDED"
+	_index_accepted_sanitization_certificate(db, job, result)
 	record_audit_event(db, actor=f"agent:{agent.agent_id}", action="RESULT_ACCEPTED", resource=f"central-job:{central_job_id}",
 		metadata={"local_job_id": payload.local_job_id, "final_status": payload.final_status,
 			"integrity_status": job.integrity_status}, organization_id=job.organization_id)
