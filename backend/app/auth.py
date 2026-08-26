@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import OperatorSessionRecord, UserRecord
+from .models import OperatorSessionRecord, OrganizationMembershipRecord, UserRecord
 from .security import production_mode, token_digest
 
 
@@ -108,3 +108,43 @@ def require_roles(*roles: OperatorRole) -> Callable:
 			raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operator role is not authorized for this action.")
 		return principal
 	return dependency
+
+
+def organization_ids(db: Session, principal: OperatorPrincipal) -> set[str] | None:
+	"""Return the tenant scope for an operator; None is the explicit global scope."""
+	if principal.development_identity or principal.role is OperatorRole.SUPER_ADMIN:
+		return None
+	if principal.user_id is None:
+		return set()
+	return set(db.execute(select(OrganizationMembershipRecord.organization_id).where(
+		OrganizationMembershipRecord.user_id == principal.user_id,
+	)).scalars())
+
+
+def require_organization_access(db: Session, principal: OperatorPrincipal, organization_id: str | None) -> None:
+	"""Fail closed for unassigned/legacy tenant resources outside global administration."""
+	if organization_id is None:
+		if organization_ids(db, principal) is None:
+			return
+		raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This legacy resource is not assigned to your organization.")
+	scope = organization_ids(db, principal)
+	if scope is not None and organization_id not in scope:
+		raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operator is not a member of this organization.")
+
+
+def require_global_scope(principal: OperatorPrincipal = Depends(require_api_key), db: Session = Depends(get_db)) -> OperatorPrincipal:
+	"""Guard legacy records with no organization ownership until they are migrated."""
+	if organization_ids(db, principal) is not None:
+		raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This legacy resource is available only in the global scope.")
+	return principal
+
+
+def require_organization_manager(db: Session, principal: OperatorPrincipal, organization_id: str) -> None:
+	"""Only global administrators or an organization's owner may change membership."""
+	if organization_ids(db, principal) is None:
+		return
+	if principal.user_id is None or db.scalar(select(OrganizationMembershipRecord.role).where(
+		OrganizationMembershipRecord.organization_id == organization_id,
+		OrganizationMembershipRecord.user_id == principal.user_id,
+	)) != "OWNER":
+		raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization ownership is required to manage membership.")

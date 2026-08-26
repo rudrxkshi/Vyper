@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import require_api_key
+from ..auth import require_global_scope
 from ..db import get_db
 from ..models import AssetRecord
 from ..schemas import AssetRead
 from ..services import asset_to_dict
 
-router = APIRouter(tags=["assets"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["assets"], dependencies=[Depends(require_global_scope)])
 
 
 @router.get("", response_model=list[AssetRead])

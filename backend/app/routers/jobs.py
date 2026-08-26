@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import OperatorPrincipal, OperatorRole, require_api_key, require_roles
+from ..auth import OperatorPrincipal, OperatorRole, require_global_scope, require_roles
 from ..db import get_db
 from ..models import JobRecord
 from ..schemas import JobRead, SanitizeJobCreate
 from ..services import ResultIntegrityError, job_to_dict, persist_job
 
-router = APIRouter(tags=["jobs"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["jobs"], dependencies=[Depends(require_global_scope)])
 
 
 @router.post("/sanitize", response_model=JobRead, status_code=status.HTTP_201_CREATED)

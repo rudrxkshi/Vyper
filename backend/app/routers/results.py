@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import require_api_key
+from ..auth import require_global_scope
 from ..db import get_db
 from ..models import ResultRecord
 from ..schemas import ResultRead
 from ..services import result_to_dict
 
-router = APIRouter(tags=["results"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["results"], dependencies=[Depends(require_global_scope)])
 
 
 @router.get("", response_model=list[ResultRead])

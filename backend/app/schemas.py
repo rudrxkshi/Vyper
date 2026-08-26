@@ -87,6 +87,7 @@ class AuditLogRead(BaseModel):
     request_id: str | None = None
     previous_hash: str | None = None
     event_hash: str | None = None
+    organization_id: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -258,6 +259,19 @@ class OrganizationCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
 
 
+class OrganizationMembershipCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    role: str = Field(default="MEMBER", pattern=r"^(OWNER|MEMBER)$")
+
+
+class OrganizationMembershipUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(pattern=r"^(OWNER|MEMBER)$")
+
+
 class RemotePolicyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=128)
@@ -265,6 +279,16 @@ class RemotePolicyCreate(BaseModel):
     requires_approval: bool = True
     required_approvals: int = Field(default=1, ge=0, le=2)
     allow_system_disk: bool = False
+
+
+class RemotePolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    remote_sanitization_allowed: bool | None = None
+    requires_approval: bool | None = None
+    required_approvals: int | None = Field(default=None, ge=0, le=2)
+    allow_system_disk: bool | None = None
+    revoked: bool | None = None
 
 
 class AgentJobEventUpload(BaseModel):

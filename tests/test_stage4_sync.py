@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -18,7 +18,8 @@ from agent.policy import PolicyDecision
 from agent.profiler import DeviceProfile
 from agent.verifier import VerificationResult
 from backend.app.main import create_app as create_central_app
-from backend.app.models import AgentRecord, EnrollmentTokenRecord
+from backend.app.auth import OperatorPrincipal, OperatorRole, require_api_key
+from backend.app.models import AgentRecord, EnrollmentTokenRecord, OrganizationMembershipRecord, UserRecord
 from local_agent.storage import LocalJobStore
 from local_agent.sync import AgentCredentialStore, CentralSyncClient, hardware_identity
 from local_agent.identity import Ed25519IdentityStore, endpoint_identity_fingerprint
@@ -252,6 +253,76 @@ def test_organization_policy_requires_approval_before_command_queueing(tmp_path)
 	assert approved.status_code == 200
 	assert approved.json()["status"] == "QUEUED"
 	assert approved.json()["approval_count"] == 1
+
+
+def test_remote_policy_lifecycle_versions_and_revocation(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization = client.post("/organizations", json={"name": "Policy Lifecycle"}).json()
+		created = client.post(f"/organizations/{organization['id']}/policies", json={
+			"name": "Default", "requires_approval": True, "required_approvals": 1,
+		}).json()
+		assert created["version"] == 1
+		updated = client.patch(f"/organizations/{organization['id']}/policies/{created['id']}", json={"required_approvals": 2}).json()
+		assert updated["version"] == 2
+		assert updated["required_approvals"] == 2
+		revoked = client.patch(f"/organizations/{organization['id']}/policies/{created['id']}", json={"revoked": True}).json()
+		assert revoked["version"] == 3
+		assert revoked["revoked_at"]
+		assert client.get(f"/organizations/{organization['id']}/policies").json()[0]["revoked_at"]
+
+
+def test_organization_membership_scopes_agents_assets_and_central_jobs(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization_a = client.post("/organizations", json={"name": "Tenant A"}).json()
+		organization_b = client.post("/organizations", json={"name": "Tenant B"}).json()
+		token_a = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600, "organization_id": organization_a["id"]}).json()["token"]
+		token_b = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600, "organization_id": organization_b["id"]}).json()["token"]
+		agent_a = _enroll(client, token=token_a, hostname="tenant-a").json()
+		agent_b = _enroll(client, token=token_b, hostname="tenant-b").json()
+		assert client.put("/agent/inventory", headers=_auth(agent_a), json=_inventory([_device(serial="TENANT-A")])).status_code == 200
+		assert client.put("/agent/inventory", headers=_auth(agent_b), json=_inventory([_device(serial="TENANT-B")])).status_code == 200
+		asset_a = client.get(f"/agents/{agent_a['agent_id']}/assets").json()[0]
+		asset_b = client.get(f"/agents/{agent_b['agent_id']}/assets").json()[0]
+		assert client.post(f"/agents/{agent_a['agent_id']}/jobs", json={
+			"asset_id": asset_a["id"], "dry_run": True, "idempotency_key": "tenant-a-job",
+		}).status_code == 201
+		assert client.post(f"/agents/{agent_b['agent_id']}/jobs", json={
+			"asset_id": asset_b["id"], "dry_run": True, "idempotency_key": "tenant-b-job",
+		}).status_code == 201
+		with client.app.state.session_factory() as db:
+			user = UserRecord(id="tenant-a-user", username="tenant-a-user", display_name="Tenant A User",
+				password_hash="not-used", role="ADMIN", password_changed_at=datetime.now(timezone.utc))
+			db.add(user)
+			db.add(OrganizationMembershipRecord(id="tenant-a-membership", organization_id=organization_a["id"], user_id=user.id, role="MEMBER"))
+			db.commit()
+		principal = OperatorPrincipal("tenant-a-user", "tenant-a-user", OperatorRole.ADMIN)
+		client.app.dependency_overrides[require_api_key] = lambda: principal
+		try:
+			assert [item["agent_id"] for item in client.get("/agents").json()] == [agent_a["agent_id"]]
+			assert client.get(f"/agents/{agent_b['agent_id']}/assets").status_code == 403
+			assert {item["agent_id"] for item in client.get("/central-jobs").json()} == {agent_a["agent_id"]}
+		finally:
+			client.app.dependency_overrides.clear()
+
+
+def test_organization_membership_lifecycle_retains_an_owner(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization = client.post("/organizations", json={"name": "Lifecycle Tenant"}).json()
+		with client.app.state.session_factory() as db:
+			user = UserRecord(id="lifecycle-user", username="lifecycle-user", display_name="Lifecycle User",
+				password_hash="not-used", role="ADMIN", password_changed_at=datetime.now(timezone.utc))
+			second = UserRecord(id="lifecycle-second", username="lifecycle-second", display_name="Lifecycle Second",
+				password_hash="not-used", role="ADMIN", password_changed_at=datetime.now(timezone.utc))
+			db.add(user)
+			db.add(second)
+			db.commit()
+		assert client.post(f"/organizations/{organization['id']}/members", json={"user_id": user.id, "role": "OWNER"}).status_code == 201
+		assert client.post(f"/organizations/{organization['id']}/members", json={"user_id": second.id, "role": "OWNER"}).status_code == 201
+		members = client.get(f"/organizations/{organization['id']}/members").json()
+		owner_id = next(item["user_id"] for item in members if item["role"] == "OWNER")
+		assert client.patch(f"/organizations/{organization['id']}/members/{owner_id}", json={"role": "MEMBER"}).status_code == 200
+		assert client.delete(f"/organizations/{organization['id']}/members/{user.id}").status_code == 204
+		assert client.delete(f"/organizations/{organization['id']}/members/{second.id}").status_code == 409
 
 
 def test_system_disk_boot_dry_run_still_requires_local_boot_confirmation(tmp_path):
