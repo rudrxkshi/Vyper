@@ -93,13 +93,13 @@ def create_app(
 	app = FastAPI(title="VYPER Local Agent API", version=API_VERSION, lifespan=lifespan)
 	configured_origins = os.getenv(
 		"VYPER_LOCAL_AGENT_CORS_ORIGINS",
-		"http://127.0.0.1:3000,http://localhost:3000",
+		"http://127.0.0.1:8787,http://localhost:8787,http://127.0.0.1:3000,http://localhost:3000",
 	)
 	allowed_origins = [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
 	app.add_middleware(
 		CORSMiddleware,
 		allow_origins=allowed_origins,
-		allow_credentials=False,
+		allow_credentials=True,
 		allow_methods=["GET", "POST"],
 		allow_headers=["Content-Type", "X-VYPER-API-Key"],
 	)

@@ -172,6 +172,21 @@ def _submit(client, target="/dev/sdz", *, dry_run=True, password=None):
 	)
 
 
+def test_packaged_console_origin_has_credentialed_cors_access(tmp_path):
+	client, _, _ = _client(tmp_path)
+	response = client.options(
+		"/health",
+		headers={
+			"Origin": "http://127.0.0.1:8787",
+			"Access-Control-Request-Method": "GET",
+			"Access-Control-Request-Headers": "X-VYPER-API-Key",
+		},
+	)
+	assert response.status_code == 200
+	assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:8787"
+	assert response.headers["access-control-allow-credentials"] == "true"
+
+
 def test_health_devices_and_cors(tmp_path):
 	client, _agent, _executor = _client(tmp_path)
 	with client:
