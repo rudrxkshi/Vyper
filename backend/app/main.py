@@ -27,8 +27,9 @@ from .routers.devices import router as devices_router
 from .routers.downloads import router as downloads_router
 from .routers.jobs import router as jobs_router
 from .routers.results import router as results_router
+from .routers.security_events import router as security_events_router
 
-SUPPORTED_ALEMBIC_HEAD = "0003_central_certificates"
+SUPPORTED_ALEMBIC_HEAD = "0007_remote_policy_lifecycle"
 
 
 def require_supported_schema(engine) -> None:
@@ -145,6 +146,7 @@ def create_app(*, database_url: str | None = None, agent_gateway=None) -> FastAP
 	app.include_router(results_router, prefix="/results")
 	app.include_router(certificates_router, prefix="/certificates")
 	app.include_router(audit_logs_router, prefix="/audit-logs")
+	app.include_router(security_events_router, prefix="/security-events")
 	app.include_router(auth_router)
 	app.include_router(agents_router)
 	app.include_router(downloads_router)
@@ -152,4 +154,3 @@ def create_app(*, database_url: str | None = None, agent_gateway=None) -> FastAP
 
 
 app = create_app()
-

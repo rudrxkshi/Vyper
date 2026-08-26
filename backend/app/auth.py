@@ -13,14 +13,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import OperatorSessionRecord, UserRecord
+from .models import OperatorSessionRecord, OrganizationMembershipRecord, UserRecord
 from .security import production_mode, token_digest
 
 
 class OperatorRole(str, Enum):
+	SUPER_ADMIN = "SUPER_ADMIN"
 	ADMIN = "ADMIN"
+	SECURITY_ADMIN = "SECURITY_ADMIN"
 	OPERATOR = "OPERATOR"
 	AUDITOR = "AUDITOR"
+	VIEWER = "VIEWER"
 
 
 @dataclass(frozen=True)
@@ -36,8 +39,15 @@ class OperatorPrincipal:
 		return f"operator:{self.username}"
 
 
+from agent.credentials import AgentCredentialStore
+
 api_key_header = APIKeyHeader(name="X-VYPER-API-Key", auto_error=False)
 bearer = HTTPBearer(auto_error=False)
+
+
+def _local_agent_api_key() -> str | None:
+    credentials = AgentCredentialStore().load()
+    return credentials.api_key if credentials else None
 
 
 def _session_principal(token: str | None, db: Session) -> OperatorPrincipal | None:
@@ -80,7 +90,7 @@ def require_api_key(
 
 	# Explicitly development-only compatibility. It is impossible to enable in production.
 	if not production_mode():
-		expected = os.getenv("VYPER_API_KEY")
+		expected = os.getenv("VYPER_API_KEY") or _local_agent_api_key()
 		if expected and api_key and hmac.compare_digest(api_key, expected):
 			principal = OperatorPrincipal(None, "development-api-key", OperatorRole.ADMIN, True)
 			request.state.operator = principal
@@ -98,3 +108,45 @@ def require_roles(*roles: OperatorRole) -> Callable:
 			raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operator role is not authorized for this action.")
 		return principal
 	return dependency
+
+
+def organization_ids(db: Session, principal: OperatorPrincipal) -> set[str] | None:
+	"""Return the tenant scope for an operator; None is the explicit global scope."""
+	if principal.development_identity or principal.role is OperatorRole.SUPER_ADMIN:
+		return None
+	if principal.user_id is None:
+		return set()
+	return set(db.execute(select(OrganizationMembershipRecord.organization_id).where(
+		OrganizationMembershipRecord.user_id == principal.user_id,
+		OrganizationMembershipRecord.disabled_at.is_(None),
+	)).scalars())
+
+
+def require_organization_access(db: Session, principal: OperatorPrincipal, organization_id: str | None) -> None:
+	"""Fail closed for unassigned/legacy tenant resources outside global administration."""
+	if organization_id is None:
+		if organization_ids(db, principal) is None:
+			return
+		raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This legacy resource is not assigned to your organization.")
+	scope = organization_ids(db, principal)
+	if scope is not None and organization_id not in scope:
+		raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operator is not a member of this organization.")
+
+
+def require_global_scope(principal: OperatorPrincipal = Depends(require_api_key), db: Session = Depends(get_db)) -> OperatorPrincipal:
+	"""Guard legacy records with no organization ownership until they are migrated."""
+	if organization_ids(db, principal) is not None:
+		raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This legacy resource is available only in the global scope.")
+	return principal
+
+
+def require_organization_manager(db: Session, principal: OperatorPrincipal, organization_id: str) -> None:
+	"""Only global administrators or an organization's owner may change membership."""
+	if organization_ids(db, principal) is None:
+		return
+	if principal.user_id is None or db.scalar(select(OrganizationMembershipRecord.role).where(
+		OrganizationMembershipRecord.organization_id == organization_id,
+		OrganizationMembershipRecord.user_id == principal.user_id,
+		OrganizationMembershipRecord.disabled_at.is_(None),
+	)) != "OWNER":
+		raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization ownership is required to manage membership.")

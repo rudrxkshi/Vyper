@@ -112,10 +112,12 @@ command process isolation and service packaging remain future hardening work.
 ## Agent enrollment and synchronization
 
 Operator authentication creates a short-lived, single-use enrollment token.
-The local agent exchanges it once for an agent ID and an independently scoped
-Bearer token. Central persists hashes rather than plaintext tokens and can
-revoke an agent immediately. Agent status is derived from the last authenticated
-heartbeat and the configured offline threshold.
+The local agent generates and retains an Ed25519 private key, then exchanges the
+token once for an agent ID, independently scoped Bearer token, and pinned central
+command verification key. Central persists the endpoint public key and hashes
+rather than plaintext tokens and can revoke an agent immediately. Agent status
+is derived from the last authenticated heartbeat and the configured offline
+threshold.
 
 Inventory records are owned by an authenticated agent and upserted by stable
 hardware identity. Path changes become observations rather than new assets.
@@ -129,6 +131,13 @@ QUEUED -> CLAIMED -> WAITING_LOCAL_APPROVAL -> RUNNING/VERIFYING
                                                    +-> VERIFIED
                                                    +-> FAILED/INCONCLUSIVE/UNSUPPORTED/CANCELLED
 ```
+
+Each assignment is a canonical, Ed25519-signed `SANITIZE` command with a command
+ID, target agent, issued/expiry time, nonce, authorization metadata, and typed
+parameters. Before persisting the request, the agent verifies the signature,
+pinned key ID, intended device, operation allowlist, time window, and required
+parameters. A durable command receipt rejects nonce or command-ID reuse with a
+different command; an identical transport re-delivery remains idempotent.
 
 Dry runs may be auto-submitted only when the local configuration permits it.
 Destructive requests always require a separate local approval. Before local

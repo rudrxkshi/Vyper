@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import require_api_key
+from ..auth import require_global_scope
 from ..db import get_db
 from ..models import CentralCertificateRecord, CertificateRecord
 from ..schemas import CertificateRead
 from ..services import certificate_to_dict
 
-router = APIRouter(tags=["certificates"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["certificates"], dependencies=[Depends(require_global_scope)])
 
 
 @router.get("", response_model=list[CertificateRead])

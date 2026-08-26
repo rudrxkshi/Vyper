@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from vyper_version import __version__
 
 from agent.certificate import CertificateBuilder, SanitizationCertificate
 from agent.common import JobState, SanitizationResult, SanitizationStatus
+from agent.credentials import AgentCredentialStore, authorization_api_key
 from agent.evidence import EvidenceCollector, EvidenceRecord
 from agent.nvme_scope import NVMeControllerResolver
 from agent.pathways.ata_erase import ATAErasePathway
@@ -59,6 +61,9 @@ class VYPERAgent:
         verifier: Verifier | None = None,
         evidence_collector: EvidenceCollector | None = None,
         certificate_builder: CertificateBuilder | None = None,
+        credential_store: AgentCredentialStore | None = None,
+        api_key_required: bool = False,
+        expected_api_key: str | None = None,
         nvme_scope_resolver: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self.dry_run = dry_run
@@ -69,6 +74,9 @@ class VYPERAgent:
             dry_run=dry_run, agent_version=f"vyper-agent/{__version__}"
         )
         self.certificate_builder = certificate_builder or CertificateBuilder()
+        self.credential_store = credential_store or AgentCredentialStore()
+        self.api_key_required = bool(api_key_required)
+        self.expected_api_key = expected_api_key
         resolver = NVMeControllerResolver(
             profiler=self.profiler,
             command_executor=getattr(self.profiler, "command_executor", None),
@@ -88,6 +96,17 @@ class VYPERAgent:
         effective_dry_run = self.dry_run if dry_run is None else bool(dry_run)
         state_history: list[JobState] = _ObservableStateHistory([JobState.PENDING], event_callback)
         now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        if self._api_key_verification_enabled():
+            supplied_key, supplied_device_id = authorization_api_key(authorization)
+            if not self._verify_api_key(supplied_key, device_id=supplied_device_id):
+                return self._api_key_rejected_result(
+                    target=str(target or ""),
+                    dry_run=effective_dry_run,
+                    state_history=state_history,
+                    timestamp=now_iso,
+                    reason="Agent API key verification failed.",
+                )
 
         if not target or not str(target).strip():
             execution = SanitizationResult(
@@ -500,6 +519,62 @@ class VYPERAgent:
             message="Workflow completed.",
         )
 
+    def _api_key_verification_enabled(self) -> bool:
+        return bool(self.api_key_required or self.expected_api_key)
+
+    def _verify_api_key(self, api_key: str | None, *, device_id: str | None = None) -> bool:
+        if not api_key:
+            return False
+        if self.expected_api_key:
+            return hmac.compare_digest(str(api_key), self.expected_api_key)
+        return self.credential_store.verify(api_key, device_id=device_id)
+
+    def _api_key_rejected_result(
+        self,
+        *,
+        target: str,
+        dry_run: bool,
+        state_history: list[JobState],
+        timestamp: str,
+        reason: str,
+    ) -> OrchestrationJobResult:
+        execution = SanitizationResult(
+            status=SanitizationStatus.FAILED,
+            target_device=target,
+            dry_run=dry_run,
+            message=reason,
+            metadata={"method": None, "start_time": timestamp, "end_time": timestamp, "duration_seconds": 0.0},
+        )
+        verification = self._verification_placeholder(
+            target=target,
+            pathway="",
+            status=SanitizationStatus.INCONCLUSIVE,
+            verified=False,
+            message="Verification skipped because agent API key validation failed.",
+        )
+        profile = DeviceProfile(device_path=target, device_type="UNKNOWN", errors=["Agent API key validation failed."])
+        policy = PolicyDecision(
+            selected_pathway=None,
+            device_type="UNKNOWN",
+            reason="Agent API key validation failed before profiling.",
+            unsupported=True,
+        )
+        state_history.append(JobState.FAILED)
+        evidence = self._build_evidence(profile, policy, execution, verification, started_at=timestamp, completed_at=timestamp)
+        certificate = self.certificate_builder.build(evidence)
+        return OrchestrationJobResult(
+            job_state=JobState.FAILED,
+            state_history=state_history,
+            target=target,
+            profile=profile,
+            policy=policy,
+            execution=execution,
+            verification=verification,
+            evidence=evidence,
+            certificate=certificate,
+            message=reason,
+        )
+
     def _resolve_pathway(self, pathway_name: str, dry_run: bool, *, progress_callback=None):
         if pathway_name == "HDD_OVERWRITE":
             return HDDOverwritePathway(dry_run=dry_run, progress_callback=progress_callback)
@@ -680,13 +755,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Run with dry-run safeguards enabled")
     parser.add_argument("--authorize", action="store_true", help="Explicitly authorize destructive execution")
     parser.add_argument("--ata-password", default=None, help="ATA password when required by ATA secure erase")
+    parser.add_argument("--api-key", default=None, help="Agent API key to authenticate this request")
+    parser.add_argument("--require-api-key", action="store_true", help="Require the supplied API key to match the generated device credential")
     args = parser.parse_args(argv)
 
     authorization = {"approved": bool(args.authorize)}
     if args.ata_password:
         authorization["ata_password"] = args.ata_password
+    if args.api_key:
+        authorization["agent_api_key"] = args.api_key
 
-    agent = VYPERAgent(dry_run=bool(args.dry_run))
+    agent = VYPERAgent(dry_run=bool(args.dry_run), api_key_required=bool(args.require_api_key))
     result = agent.sanitize_device(args.device, authorization, dry_run=bool(args.dry_run))
 
     summary = _result_to_summary(result)

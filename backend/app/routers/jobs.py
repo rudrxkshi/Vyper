@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import OperatorPrincipal, OperatorRole, require_api_key, require_roles
+from ..auth import OperatorPrincipal, OperatorRole, require_global_scope, require_roles
 from ..db import get_db
 from ..models import JobRecord
 from ..schemas import JobRead, SanitizeJobCreate
 from ..services import ResultIntegrityError, job_to_dict, persist_job
 
-router = APIRouter(tags=["jobs"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["jobs"], dependencies=[Depends(require_global_scope)])
 
 
 @router.post("/sanitize", response_model=JobRead, status_code=status.HTTP_201_CREATED)
@@ -18,6 +18,12 @@ def create_sanitization_job(payload: SanitizeJobCreate, request: Request,
 	principal: OperatorPrincipal = Depends(require_roles(OperatorRole.ADMIN, OperatorRole.OPERATOR)), db: Session = Depends(get_db)):
 	agent_gateway = request.app.state.agent_gateway
 	authorization = payload.authorization.model_dump(exclude_none=True)
+	agent_api_key = request.headers.get("X-VYPER-Agent-API-Key") or request.headers.get("X-VYPER-API-Key")
+	agent_device_id = request.headers.get("X-VYPER-Agent-Device-Id")
+	if agent_api_key:
+		authorization["agent_api_key"] = agent_api_key
+	if agent_device_id:
+		authorization["agent_device_id"] = agent_device_id
 	result = agent_gateway.dispatch(target=payload.target, authorization=authorization, dry_run=payload.dry_run)
 	try:
 		job = persist_job(db, result=result, authorization=authorization, requested_dry_run=payload.dry_run, actor=principal.audit_identity)

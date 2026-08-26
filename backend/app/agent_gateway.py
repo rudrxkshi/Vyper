@@ -11,6 +11,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, ValidationError
 
 from agent.agent import OrchestrationJobResult, VYPERAgent
+from agent.credentials import AgentCredentialStore
 from local_agent.schemas import LocalJobAccepted, LocalJobResponse
 
 
@@ -49,9 +50,14 @@ class AgentGateway(Protocol):
 
 class LocalAgentGateway:
     def __init__(self, agent: VYPERAgent | None = None) -> None:
-        self.agent = agent or VYPERAgent(dry_run=True)
+        credential_store = AgentCredentialStore()
+        self.credential_store = credential_store
+        self._owns_agent = agent is None
+        self.agent = agent or VYPERAgent(dry_run=True, credential_store=credential_store, api_key_required=credential_store.exists())
 
     def dispatch(self, *, target: str, authorization: dict[str, Any], dry_run: bool | None = None) -> dict[str, Any]:
+        if self._owns_agent and not self.agent.api_key_required and self.credential_store.exists():
+            self.agent.api_key_required = True
         return _normalize_result(self.agent.sanitize_device(target, authorization=authorization, dry_run=dry_run))
 
 

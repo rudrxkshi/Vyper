@@ -89,6 +89,7 @@ class AuditLogRead(BaseModel):
     request_id: str | None = None
     previous_hash: str | None = None
     event_hash: str | None = None
+    organization_id: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -165,6 +166,7 @@ class JobRead(BaseModel):
 class EnrollmentTokenCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    organization_id: str | None = None
 
 
 class EnrollmentTokenRead(BaseModel):
@@ -183,12 +185,17 @@ class AgentEnrollRequest(BaseModel):
     agent_version: str = Field(min_length=1)
     api_version: str = "2"
     agent_protocol_version: str = "1"
+    device_public_key_pem: str | None = None
+    device_public_key_id: str | None = Field(default=None, min_length=64, max_length=64)
+    identity_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class AgentEnrollResponse(BaseModel):
     agent_id: str
     agent_token: str
     agent_protocol_version: str = "1"
+    command_verification_key_pem: str | None = None
+    command_verification_key_id: str | None = None
 
 
 class AgentHeartbeat(BaseModel):
@@ -201,6 +208,10 @@ class AgentHeartbeat(BaseModel):
     architecture: str
     local_status: str | None = None
     active_job_count: int = Field(default=0, ge=0)
+    current_state: str | None = None
+    active_job_id: str | None = None
+    connectivity_status: str | None = None
+    hardware_status: dict[str, Any] = Field(default_factory=dict)
 
 
 class InventoryDevice(BaseModel):
@@ -242,6 +253,50 @@ class CentralJobCreate(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
     expires_in_seconds: int = Field(default=3600, ge=60, le=86400)
     execution_mode: str = Field(default="normal_local", pattern=r"^(normal_local|boot_sanitize)$")
+    policy_id: str | None = None
+
+
+class CentralJobApprovalDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: str = Field(default="APPROVED", pattern=r"^(APPROVED|REJECTED)$")
+
+
+class OrganizationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=255)
+
+
+class OrganizationMembershipCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    role: str = Field(default="MEMBER", pattern=r"^(OWNER|MEMBER)$")
+
+
+class OrganizationMembershipUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(pattern=r"^(OWNER|MEMBER)$")
+
+
+class RemotePolicyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=128)
+    remote_sanitization_allowed: bool = True
+    requires_approval: bool = True
+    required_approvals: int = Field(default=1, ge=0, le=2)
+    allow_system_disk: bool = False
+
+
+class RemotePolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    remote_sanitization_allowed: bool | None = None
+    requires_approval: bool | None = None
+    required_approvals: int | None = Field(default=None, ge=0, le=2)
+    allow_system_disk: bool | None = None
+    revoked: bool | None = None
 
 
 class AgentJobEventUpload(BaseModel):

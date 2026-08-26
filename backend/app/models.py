@@ -108,6 +108,7 @@ class AuditLogRecord(Base):
 	request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 	previous_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 	event_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+	organization_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=True, index=True)
 	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 	job: Mapped[JobRecord | None] = relationship(back_populates="audit_logs")
@@ -178,6 +179,10 @@ class AgentRecord(Base):
 	revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 	metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 	token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+	public_key_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
+	public_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+	identity_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+	organization_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=True, index=True)
 
 
 class EnrollmentTokenRecord(Base):
@@ -189,6 +194,43 @@ class EnrollmentTokenRecord(Base):
 	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 	consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 	consumed_by_agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+	organization_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=True, index=True)
+
+
+class OrganizationRecord(Base):
+	__tablename__ = "organizations"
+
+	id: Mapped[str] = mapped_column(String(36), primary_key=True)
+	name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class OrganizationMembershipRecord(Base):
+	__tablename__ = "organization_memberships"
+	__table_args__ = (UniqueConstraint("organization_id", "user_id", name="uq_organization_membership"),)
+
+	id: Mapped[str] = mapped_column(String(36), primary_key=True)
+	organization_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
+	user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+	role: Mapped[str] = mapped_column(String(32), nullable=False, default="MEMBER")
+	disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class RemotePolicyRecord(Base):
+	__tablename__ = "remote_policies"
+	__table_args__ = (UniqueConstraint("organization_id", "name", name="uq_remote_policy_organization_name"),)
+
+	id: Mapped[str] = mapped_column(String(36), primary_key=True)
+	organization_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
+	name: Mapped[str] = mapped_column(String(128), nullable=False)
+	remote_sanitization_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+	requires_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+	required_approvals: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+	allow_system_disk: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+	version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+	revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class AgentAssetRecord(Base):
@@ -241,6 +283,37 @@ class CentralJobRecord(Base):
 	result_idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 	nonce: Mapped[str] = mapped_column(String(64), nullable=False)
 	integrity_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+	command_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+	organization_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=True, index=True)
+	policy_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("remote_policies.id"), nullable=True)
+	required_approvals: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class CentralJobApprovalRecord(Base):
+	__tablename__ = "central_job_approvals"
+	__table_args__ = (UniqueConstraint("central_job_id", "approver_user_id", name="uq_central_job_approver"),)
+
+	id: Mapped[str] = mapped_column(String(36), primary_key=True)
+	central_job_id: Mapped[str] = mapped_column(String(36), ForeignKey("central_jobs.central_job_id"), nullable=False, index=True)
+	approver_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+	approver: Mapped[str] = mapped_column(String(128), nullable=False)
+	decision: Mapped[str] = mapped_column(String(32), nullable=False, default="APPROVED")
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SecurityEventRecord(Base):
+	__tablename__ = "security_events"
+
+	id: Mapped[str] = mapped_column(String(36), primary_key=True)
+	event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+	severity: Mapped[str] = mapped_column(String(32), nullable=False, default="INFO")
+	actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+	resource: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+	agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+	central_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+	organization_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=True, index=True)
+	metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class CentralCertificateRecord(Base):
@@ -279,3 +352,9 @@ class CentralJobEventRecord(Base):
 @event.listens_for(AuditLogRecord, "before_delete")
 def _audit_records_are_append_only(*_args) -> None:
 	raise RuntimeError("Audit records are append-only.")
+
+
+@event.listens_for(CentralJobApprovalRecord, "before_update")
+@event.listens_for(CentralJobApprovalRecord, "before_delete")
+def _approval_records_are_append_only(*_args) -> None:
+	raise RuntimeError("Approval records are append-only.")

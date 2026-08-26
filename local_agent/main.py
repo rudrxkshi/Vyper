@@ -22,6 +22,7 @@ from .schemas import (
 )
 from .storage import DuplicateActiveTargetError, LocalJobStore
 from .sync import AgentCredentialStore, CentralSyncClient, SyncLoop
+from .identity import Ed25519IdentityStore
 
 
 API_VERSION = "2"
@@ -65,6 +66,7 @@ def create_app(
 			sync_client = CentralSyncClient(
 				central_url=central_url,
 				credential_store=AgentCredentialStore(credential_path),
+				identity_store=Ed25519IdentityStore(Path(os.getenv("VYPER_AGENT_IDENTITY_PATH") or credential_path.with_name("agent_identity.pem"))),
 				job_store=store,
 				discovery=app.state.device_discovery,
 				submit_local_job=lambda **kwargs: dispatch_local_job(**kwargs).local_job_id,

@@ -36,6 +36,10 @@ class DuplicateActiveTargetError(RuntimeError):
 	pass
 
 
+class RemoteCommandReplayError(RuntimeError):
+	pass
+
+
 class LocalJobStore:
 	"""Versioned SQLite storage for local jobs and immutable lifecycle events."""
 
@@ -145,6 +149,12 @@ class LocalJobStore:
 					next_attempt_at TEXT NOT NULL,
 					delivered_at TEXT,
 					last_error TEXT
+				);
+				CREATE TABLE IF NOT EXISTS remote_command_receipts (
+					nonce TEXT PRIMARY KEY,
+					command_id TEXT NOT NULL UNIQUE,
+					command_hash TEXT NOT NULL,
+					received_at TEXT NOT NULL
 				);
 				"""
 			)
@@ -471,6 +481,27 @@ class LocalJobStore:
 				),
 			)
 		return self.get_remote_request(central_job_id)
+
+	def record_remote_command(self, *, command_id: str, nonce: str, command_hash: str) -> bool:
+		"""Persist a signed-command receipt before it can reach local approval.
+
+		A byte-identical re-delivery is safe and returns ``False``. Any reuse of a
+		nonce or command id with a different signed envelope is rejected locally.
+		"""
+		with self._connect() as connection:
+			existing = connection.execute(
+				"SELECT command_id, command_hash FROM remote_command_receipts WHERE nonce = ? OR command_id = ?",
+				(nonce, command_id),
+			).fetchone()
+			if existing is not None:
+				if existing["command_id"] == command_id and existing["command_hash"] == command_hash:
+					return False
+				raise RemoteCommandReplayError("Remote command nonce or command ID was already used by another command.")
+			connection.execute(
+				"INSERT INTO remote_command_receipts(nonce, command_id, command_hash, received_at) VALUES (?, ?, ?, ?)",
+				(nonce, command_id, command_hash, utc_now()),
+			)
+		return True
 
 	def get_remote_request(self, central_job_id: str) -> dict[str, Any] | None:
 		with self._connect() as connection:

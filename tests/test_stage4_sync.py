@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -18,9 +18,12 @@ from agent.policy import PolicyDecision
 from agent.profiler import DeviceProfile
 from agent.verifier import VerificationResult
 from backend.app.main import create_app as create_central_app
-from backend.app.models import AgentRecord, EnrollmentTokenRecord
+from backend.app.auth import OperatorPrincipal, OperatorRole, require_api_key
+from backend.app.models import AgentRecord, CentralJobRecord, EnrollmentTokenRecord, OrganizationMembershipRecord, UserRecord
 from local_agent.storage import LocalJobStore
 from local_agent.sync import AgentCredentialStore, CentralSyncClient, hardware_identity
+from local_agent.identity import Ed25519IdentityStore, endpoint_identity_fingerprint
+from local_agent.command_verifier import verify_remote_command
 
 
 class DiscoveryStub:
@@ -111,6 +114,36 @@ def test_expired_enrollment_token_fails(tmp_path):
 	assert response.status_code == 410
 
 
+def test_enrollment_binds_a_valid_ed25519_endpoint_identity(tmp_path):
+	identity = Ed25519IdentityStore(tmp_path / "endpoint-key.pem").load_or_create()
+	with _central_client(tmp_path) as client:
+		token = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600}).json()["token"]
+		response = client.post("/agents/enroll", json={
+			"enrollment_token": token, "hostname": "identity-host", "platform": "Linux", "architecture": "x86_64",
+			"agent_version": "4.0-test", "api_version": "2", "agent_protocol_version": "1",
+			"device_public_key_pem": identity.public_key_pem, "device_public_key_id": identity.public_key_id,
+			"identity_fingerprint": endpoint_identity_fingerprint(identity),
+		})
+		with client.app.state.session_factory() as db:
+			agent = db.get(AgentRecord, response.json()["agent_id"])
+	assert response.status_code == 200
+	assert agent.public_key_pem == identity.public_key_pem
+	assert agent.public_key_id == identity.public_key_id
+
+
+def test_enrollment_rejects_mismatched_public_key_id(tmp_path):
+	identity = Ed25519IdentityStore(tmp_path / "endpoint-key.pem").load_or_create()
+	with _central_client(tmp_path) as client:
+		token = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600}).json()["token"]
+		response = client.post("/agents/enroll", json={
+			"enrollment_token": token, "hostname": "identity-host", "platform": "Linux", "architecture": "x86_64",
+			"agent_version": "4.0-test", "api_version": "2", "agent_protocol_version": "1",
+			"device_public_key_pem": identity.public_key_pem, "device_public_key_id": "0" * 64,
+			"identity_fingerprint": endpoint_identity_fingerprint(identity),
+		})
+	assert response.status_code == 422
+
+
 def test_agent_heartbeat_auth_offline_derivation_and_revocation(tmp_path):
 	with _central_client(tmp_path) as client:
 		enrolled = _enroll(client).json()
@@ -180,6 +213,246 @@ def test_job_claim_is_assigned_atomic_idempotent_and_waits_for_local_approval(tm
 	assert claim.status_code == 200
 	assert claim.json()["status"] == "WAITING_LOCAL_APPROVAL"
 	assert second_claim.status_code == 204
+
+
+def test_claimed_job_contains_endpoint_verifiable_signed_command(tmp_path):
+	with _central_client(tmp_path) as client:
+		enrolled, headers, _asset, _job = _prepare_agent_asset_job(client)
+		claim = client.get("/agent/jobs/next", headers=headers).json()
+	verify_remote_command(
+		claim["command"], agent_id=enrolled["agent_id"],
+		public_key_pem=enrolled["command_verification_key_pem"],
+	)
+	assert claim["command"]["parameters"]["central_job_id"] == claim["central_job_id"]
+
+
+def test_signed_command_nonce_cannot_be_reused_for_another_command(tmp_path):
+	store = LocalJobStore(tmp_path / "local.db")
+	assert store.record_remote_command(command_id="command-1", nonce="nonce-1", command_hash="a" * 64) is True
+	assert store.record_remote_command(command_id="command-1", nonce="nonce-1", command_hash="a" * 64) is False
+	with pytest.raises(Exception, match="nonce|command ID"):
+		store.record_remote_command(command_id="command-2", nonce="nonce-1", command_hash="b" * 64)
+
+
+def test_organization_policy_requires_approval_before_command_queueing(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization = client.post("/organizations", json={"name": "Acme"}).json()
+		policy = client.post(f"/organizations/{organization['id']}/policies", json={
+			"name": "Two-person wipe", "requires_approval": True, "required_approvals": 1,
+		}).json()
+		token = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600, "organization_id": organization["id"]}).json()["token"]
+		enrolled = _enroll(client, token=token).json(); headers = _auth(enrolled)
+		assert client.put("/agent/inventory", headers=headers, json=_inventory([_device()])).status_code == 200
+		asset = client.get(f"/agents/{enrolled['agent_id']}/assets").json()[0]
+		created = client.post(f"/agents/{enrolled['agent_id']}/jobs", json={
+			"asset_id": asset["id"], "dry_run": False, "central_authorized": True,
+			"destructive_confirmation": "SANITIZE", "idempotency_key": "approval-policy-0001",
+			"expires_in_seconds": 3600, "policy_id": policy["id"],
+		}).json()
+		assert created["status"] == "AWAITING_APPROVAL"
+		assert client.get("/agent/jobs/next", headers=headers).status_code == 204
+		approved = client.post(f"/central-jobs/{created['central_job_id']}/approvals")
+	assert approved.status_code == 200
+	assert approved.json()["status"] == "QUEUED"
+	assert approved.json()["approval_count"] == 1
+
+
+def test_central_job_rejection_cancellation_and_approval_expiry(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization = client.post("/organizations", json={"name": "Approval Lifecycle"}).json()
+		policy = client.post(f"/organizations/{organization['id']}/policies", json={
+			"name": "Approval required", "requires_approval": True, "required_approvals": 1,
+		}).json()
+		token = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600, "organization_id": organization["id"]}).json()["token"]
+		enrolled = _enroll(client, token=token).json()
+		headers = _auth(enrolled)
+		assert client.put("/agent/inventory", headers=headers, json=_inventory([_device()])).status_code == 200
+		asset = client.get(f"/agents/{enrolled['agent_id']}/assets").json()[0]
+
+		def create_job(key):
+			response = client.post(f"/agents/{enrolled['agent_id']}/jobs", json={
+				"asset_id": asset["id"], "dry_run": False, "central_authorized": True,
+				"destructive_confirmation": "SANITIZE", "idempotency_key": key,
+				"expires_in_seconds": 60, "policy_id": policy["id"],
+			})
+			assert response.status_code == 201
+			return response.json()
+
+		rejected = create_job("reject-job-0001")
+		rejection = client.post(f"/central-jobs/{rejected['central_job_id']}/approvals", json={"decision": "REJECTED"})
+		assert rejection.status_code == 200
+		assert rejection.json()["status"] == "REJECTED"
+		assert rejection.json()["approval_count"] == 0
+
+		cancelled = create_job("cancel-job-0001")
+		cancellation = client.post(f"/central-jobs/{cancelled['central_job_id']}/cancel")
+		assert cancellation.status_code == 200
+		assert cancellation.json()["status"] == "CANCELLED"
+
+		expired = create_job("expire-job-0001")
+		with client.app.state.session_factory() as db:
+			job = db.get(CentralJobRecord, expired["central_job_id"])
+			job.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+			db.commit()
+		assert client.post(f"/central-jobs/{expired['central_job_id']}/approvals").status_code == 409
+		assert next(item for item in client.get("/central-jobs").json() if item["central_job_id"] == expired["central_job_id"])["status"] == "EXPIRED"
+		event_types = {item["event_type"] for item in client.get("/security-events").json()}
+		assert {"CENTRAL_JOB_REJECTED", "CENTRAL_JOB_CANCELLED", "CENTRAL_JOB_EXPIRED"} <= event_types
+
+
+def test_real_principals_require_two_people_and_mfa_for_approval(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization = client.post("/organizations", json={"name": "Real Principal Approval"}).json()
+		policy = client.post(f"/organizations/{organization['id']}/policies", json={
+			"name": "Two-person MFA", "requires_approval": True, "required_approvals": 1,
+		}).json()
+		token = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600, "organization_id": organization["id"]}).json()["token"]
+		enrolled = _enroll(client, token=token).json()
+		headers = _auth(enrolled)
+		assert client.put("/agent/inventory", headers=headers, json=_inventory([_device()])).status_code == 200
+		asset = client.get(f"/agents/{enrolled['agent_id']}/assets").json()[0]
+		with client.app.state.session_factory() as db:
+			requester = UserRecord(id="requester-user", username="requester-user", display_name="Requester",
+				password_hash="not-used", role="OPERATOR", password_changed_at=datetime.now(timezone.utc))
+			approver = UserRecord(id="approver-user", username="approver-user", display_name="Approver",
+				password_hash="not-used", role="SECURITY_ADMIN", password_changed_at=datetime.now(timezone.utc))
+			db.add_all([requester, approver])
+			db.add_all([
+				OrganizationMembershipRecord(id="requester-membership", organization_id=organization["id"], user_id=requester.id, role="MEMBER"),
+				OrganizationMembershipRecord(id="approver-membership", organization_id=organization["id"], user_id=approver.id, role="MEMBER"),
+			])
+			db.commit()
+		requester_principal = OperatorPrincipal(requester.id, requester.username, OperatorRole.OPERATOR, mfa_assurance="TOTP")
+		client.app.dependency_overrides[require_api_key] = lambda: requester_principal
+		try:
+			created = client.post(f"/agents/{enrolled['agent_id']}/jobs", json={
+				"asset_id": asset["id"], "dry_run": False, "central_authorized": True,
+				"destructive_confirmation": "SANITIZE", "idempotency_key": "two-person-mfa-0001",
+				"expires_in_seconds": 600, "policy_id": policy["id"],
+			})
+			assert created.status_code == 201
+			job_id = created.json()["central_job_id"]
+		finally:
+			client.app.dependency_overrides.clear()
+		client.app.dependency_overrides[require_api_key] = lambda: OperatorPrincipal(approver.id, approver.username, OperatorRole.SECURITY_ADMIN, mfa_assurance="PASSWORD")
+		try:
+			assert client.post(f"/central-jobs/{job_id}/approvals").status_code == 403
+		finally:
+			client.app.dependency_overrides.clear()
+		client.app.dependency_overrides[require_api_key] = lambda: OperatorPrincipal(requester.id, requester.username, OperatorRole.OPERATOR, mfa_assurance="TOTP")
+		try:
+			assert client.post(f"/central-jobs/{job_id}/approvals").status_code == 403
+		finally:
+			client.app.dependency_overrides.clear()
+		client.app.dependency_overrides[require_api_key] = lambda: OperatorPrincipal(approver.id, approver.username, OperatorRole.SECURITY_ADMIN, mfa_assurance="TOTP")
+		try:
+			approval = client.post(f"/central-jobs/{job_id}/approvals")
+			assert approval.status_code == 200
+			assert approval.json()["status"] == "QUEUED"
+		finally:
+			client.app.dependency_overrides.clear()
+
+
+def test_remote_policy_lifecycle_versions_and_revocation(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization = client.post("/organizations", json={"name": "Policy Lifecycle"}).json()
+		created = client.post(f"/organizations/{organization['id']}/policies", json={
+			"name": "Default", "requires_approval": True, "required_approvals": 1,
+		}).json()
+		assert created["version"] == 1
+		updated = client.patch(f"/organizations/{organization['id']}/policies/{created['id']}", json={"required_approvals": 2}).json()
+		assert updated["version"] == 2
+		assert updated["required_approvals"] == 2
+		revoked = client.patch(f"/organizations/{organization['id']}/policies/{created['id']}", json={"revoked": True}).json()
+		assert revoked["version"] == 3
+		assert revoked["revoked_at"]
+		assert client.get(f"/organizations/{organization['id']}/policies").json()[0]["revoked_at"]
+
+
+def test_organization_membership_scopes_agents_assets_and_central_jobs(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization_a = client.post("/organizations", json={"name": "Tenant A"}).json()
+		organization_b = client.post("/organizations", json={"name": "Tenant B"}).json()
+		token_a = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600, "organization_id": organization_a["id"]}).json()["token"]
+		token_b = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600, "organization_id": organization_b["id"]}).json()["token"]
+		agent_a = _enroll(client, token=token_a, hostname="tenant-a").json()
+		agent_b = _enroll(client, token=token_b, hostname="tenant-b").json()
+		assert client.put("/agent/inventory", headers=_auth(agent_a), json=_inventory([_device(serial="TENANT-A")])).status_code == 200
+		assert client.put("/agent/inventory", headers=_auth(agent_b), json=_inventory([_device(serial="TENANT-B")])).status_code == 200
+		asset_a = client.get(f"/agents/{agent_a['agent_id']}/assets").json()[0]
+		asset_b = client.get(f"/agents/{agent_b['agent_id']}/assets").json()[0]
+		assert client.post(f"/agents/{agent_a['agent_id']}/jobs", json={
+			"asset_id": asset_a["id"], "dry_run": True, "idempotency_key": "tenant-a-job",
+		}).status_code == 201
+		assert client.post(f"/agents/{agent_b['agent_id']}/jobs", json={
+			"asset_id": asset_b["id"], "dry_run": True, "idempotency_key": "tenant-b-job",
+		}).status_code == 201
+		with client.app.state.session_factory() as db:
+			user = UserRecord(id="tenant-a-user", username="tenant-a-user", display_name="Tenant A User",
+				password_hash="not-used", role="ADMIN", password_changed_at=datetime.now(timezone.utc))
+			db.add(user)
+			db.add(OrganizationMembershipRecord(id="tenant-a-membership", organization_id=organization_a["id"], user_id=user.id, role="MEMBER"))
+			db.commit()
+		principal = OperatorPrincipal("tenant-a-user", "tenant-a-user", OperatorRole.ADMIN)
+		client.app.dependency_overrides[require_api_key] = lambda: principal
+		try:
+			assert [item["agent_id"] for item in client.get("/agents").json()] == [agent_a["agent_id"]]
+			assert client.get(f"/agents/{agent_b['agent_id']}/assets").status_code == 403
+			assert {item["agent_id"] for item in client.get("/central-jobs").json()} == {agent_a["agent_id"]}
+		finally:
+			client.app.dependency_overrides.clear()
+
+
+def test_organization_membership_lifecycle_retains_an_owner(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization = client.post("/organizations", json={"name": "Lifecycle Tenant"}).json()
+		with client.app.state.session_factory() as db:
+			user = UserRecord(id="lifecycle-user", username="lifecycle-user", display_name="Lifecycle User",
+				password_hash="not-used", role="ADMIN", password_changed_at=datetime.now(timezone.utc))
+			second = UserRecord(id="lifecycle-second", username="lifecycle-second", display_name="Lifecycle Second",
+				password_hash="not-used", role="ADMIN", password_changed_at=datetime.now(timezone.utc))
+			db.add(user)
+			db.add(second)
+			db.commit()
+		assert client.post(f"/organizations/{organization['id']}/members", json={"user_id": user.id, "role": "OWNER"}).status_code == 201
+		assert client.post(f"/organizations/{organization['id']}/members", json={"user_id": second.id, "role": "OWNER"}).status_code == 201
+		members = client.get(f"/organizations/{organization['id']}/members").json()
+		owner_id = next(item["user_id"] for item in members if item["role"] == "OWNER")
+		assert client.patch(f"/organizations/{organization['id']}/members/{owner_id}", json={"role": "MEMBER"}).status_code == 200
+		assert client.delete(f"/organizations/{organization['id']}/members/{user.id}").status_code == 204
+		assert client.delete(f"/organizations/{organization['id']}/members/{second.id}").status_code == 409
+
+
+def test_disabled_membership_loses_scope_and_can_be_reactivated(tmp_path):
+	with _central_client(tmp_path) as client:
+		organization = client.post("/organizations", json={"name": "Disable Tenant"}).json()
+		with client.app.state.session_factory() as db:
+			user = UserRecord(id="disable-user", username="disable-user", display_name="Disable User",
+				password_hash="not-used", role="ADMIN", password_changed_at=datetime.now(timezone.utc))
+			db.add(user)
+			db.commit()
+		assert client.post(f"/organizations/{organization['id']}/members", json={"user_id": user.id, "role": "MEMBER"}).status_code == 201
+		principal = OperatorPrincipal(user.id, user.username, OperatorRole.ADMIN)
+		client.app.dependency_overrides[require_api_key] = lambda: principal
+		try:
+			assert [item["id"] for item in client.get("/organizations").json()] == [organization["id"]]
+		finally:
+			client.app.dependency_overrides.clear()
+		assert client.delete(f"/organizations/{organization['id']}/members/{user.id}").status_code == 204
+		members = client.get(f"/organizations/{organization['id']}/members").json()
+		assert next(item for item in members if item["user_id"] == user.id)["disabled_at"] is not None
+		client.app.dependency_overrides[require_api_key] = lambda: principal
+		try:
+			assert client.get("/organizations").json() == []
+			assert client.get(f"/organizations/{organization['id']}/members").status_code == 403
+		finally:
+			client.app.dependency_overrides.clear()
+		assert client.post(f"/organizations/{organization['id']}/members", json={"user_id": user.id, "role": "MEMBER"}).status_code == 201
+		client.app.dependency_overrides[require_api_key] = lambda: principal
+		try:
+			assert [item["id"] for item in client.get("/organizations").json()] == [organization["id"]]
+		finally:
+			client.app.dependency_overrides.clear()
 
 
 def test_system_disk_boot_dry_run_still_requires_local_boot_confirmation(tmp_path):
