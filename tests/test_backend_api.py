@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from agent.agent import OrchestrationJobResult
 from agent.certificate import SanitizationCertificate
 from agent.common import JobState, SanitizationResult, SanitizationStatus
+from agent.credentials import AgentCredentialStore
 from agent.evidence import EvidenceRecord
 from agent.policy import PolicyDecision
 from agent.profiler import DeviceProfile
@@ -111,7 +112,9 @@ def _orchestration_result() -> OrchestrationJobResult:
     )
 
 
-def test_backend_persists_jobs_devices_and_certificates(tmp_path):
+def test_backend_persists_jobs_devices_and_certificates(tmp_path, monkeypatch):
+    monkeypatch.delenv("VYPER_API_KEY", raising=False)
+    monkeypatch.setenv("VYPER_AGENT_CREDENTIALS_PATH", str(tmp_path / "missing_credentials.json"))
     app = create_app(database_url=f"sqlite:///{tmp_path / 'vyper.db'}", agent_gateway=StubGateway(_orchestration_result()))
 
     with TestClient(app) as client:
@@ -142,3 +145,26 @@ def test_backend_persists_jobs_devices_and_certificates(tmp_path):
         assert certificates[0]["certificate_id"] == "cert-1"
         assert len(audit_logs) == 1
         assert audit_logs[0]["action"] == "sanitize_device"
+
+
+def test_backend_accepts_gui_generated_agent_key(tmp_path, monkeypatch):
+    credentials_path = tmp_path / "agent_credentials.json"
+    monkeypatch.delenv("VYPER_API_KEY", raising=False)
+    monkeypatch.setenv("VYPER_AGENT_CREDENTIALS_PATH", str(credentials_path))
+    credentials = AgentCredentialStore(path=credentials_path).generate()
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'vyper.db'}", agent_gateway=StubGateway(_orchestration_result()))
+
+    with TestClient(app) as client:
+        rejected = client.post(
+            "/jobs/sanitize",
+            json={"target": "/dev/sdz", "authorization": {"approved": True}, "dry_run": True},
+        )
+        accepted = client.post(
+            "/jobs/sanitize",
+            headers={"X-VYPER-API-Key": credentials.api_key},
+            json={"target": "/dev/sdz", "authorization": {"approved": True}, "dry_run": True},
+        )
+
+        assert rejected.status_code == 401
+        assert accepted.status_code == 201
+        assert accepted.json()["authorization_json"]["agent_api_key"] == "<redacted>"

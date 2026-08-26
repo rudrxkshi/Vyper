@@ -1,6 +1,4 @@
 import sys
-import secrets
-from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont
@@ -9,14 +7,15 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QLineEdit, QMessageBox, QSizePolicy, QGraphicsDropShadowEffect
 )
 
+from agent.credentials import AgentCredentialStore, AgentCredentials
+
 
 class VyperAgentKeyWindow(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.key_dir = Path.home() / ".vyper"
-        self.key_file = self.key_dir / "agent_api_key"
-        self.current_key = None
+        self.credential_store = AgentCredentialStore()
+        self.current_credentials: AgentCredentials | None = None
 
         self.setWindowTitle("Vyper Agent")
         self.setObjectName("window")
@@ -165,6 +164,17 @@ class VyperAgentKeyWindow(QWidget):
                 font-size: 12px;
                 min-height: 22px;
                 selection-background-color: #cfe2ff;
+            }
+
+            QLineEdit#deviceId {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                padding: 10px 12px;
+                color: #475569;
+                font-family: "Consolas", "Courier New", monospace;
+                font-size: 11px;
+                min-height: 20px;
             }
 
             QLineEdit#key:focus {
@@ -367,9 +377,19 @@ class VyperAgentKeyWindow(QWidget):
         card_layout.addWidget(card_title)
         card_layout.addWidget(card_subtitle)
 
-        label = QLabel("API KEY")
-        label.setObjectName("label")
-        card_layout.addWidget(label)
+        device_label = QLabel("DEVICE ID")
+        device_label.setObjectName("label")
+        card_layout.addWidget(device_label)
+
+        self.device_id_field = QLineEdit()
+        self.device_id_field.setObjectName("deviceId")
+        self.device_id_field.setReadOnly(True)
+        self.device_id_field.setPlaceholderText("Generated with the first API key")
+        card_layout.addWidget(self.device_id_field)
+
+        key_label = QLabel("API KEY")
+        key_label.setObjectName("label")
+        card_layout.addWidget(key_label)
 
         key_row = QHBoxLayout()
         key_row.setSpacing(10)
@@ -472,11 +492,12 @@ class VyperAgentKeyWindow(QWidget):
         widget.style().polish(widget)
         widget.update()
 
-    def set_key_state(self, key):
-        self.current_key = key
-        has_key = bool(key)
+    def set_key_state(self, credentials):
+        self.current_credentials = credentials
+        has_key = bool(credentials and credentials.api_key)
 
-        self.key_field.setText(key or "")
+        self.device_id_field.setText(credentials.device_id if credentials else "")
+        self.key_field.setText(credentials.api_key if credentials else "")
         self.key_field.setEchoMode(QLineEdit.Password)
         self.show_btn.setText("Show")
         self.show_btn.setEnabled(has_key)
@@ -492,24 +513,11 @@ class VyperAgentKeyWindow(QWidget):
         )
 
     def load_existing_key(self):
-        if not self.key_file.exists():
-            self.set_key_state(None)
-            return
-
-        key = self.key_file.read_text(encoding="utf-8").strip()
-        self.set_key_state(key or None)
+        self.set_key_state(self.credential_store.load())
 
     def generate_key(self):
-        # 256 bits of cryptographically secure randomness.
-        key = "vyp_" + secrets.token_urlsafe(32)
-
-        self.key_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-
-        # Store only the generated credential locally so the agent can use it.
-        # Restrict the file to the current user.
-        self.key_file.write_text(key + "\n", encoding="utf-8")
-        self.key_file.chmod(0o600)
-        self.set_key_state(key)
+        credentials = self.credential_store.generate()
+        self.set_key_state(credentials)
 
     def regenerate_key(self):
         reply = QMessageBox.warning(
@@ -526,7 +534,7 @@ class VyperAgentKeyWindow(QWidget):
             self.generate_key()
 
     def toggle_key(self):
-        if not self.current_key:
+        if not self.current_credentials:
             return
 
         if self.key_field.echoMode() == QLineEdit.Password:
@@ -537,10 +545,10 @@ class VyperAgentKeyWindow(QWidget):
             self.show_btn.setText("Show")
 
     def copy_key(self):
-        if not self.current_key:
+        if not self.current_credentials:
             return
 
-        QApplication.clipboard().setText(self.current_key)
+        QApplication.clipboard().setText(self.current_credentials.api_key)
         self.copy_btn.setText("Copied ✓")
 
         # Reset button label after a short delay without another dependency.

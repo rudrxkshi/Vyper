@@ -17,6 +17,12 @@ router = APIRouter(tags=["jobs"], dependencies=[Depends(require_api_key)])
 def create_sanitization_job(payload: SanitizeJobCreate, request: Request, db: Session = Depends(get_db)):
 	agent_gateway = request.app.state.agent_gateway
 	authorization = payload.authorization.model_dump(exclude_none=True)
+	agent_api_key = request.headers.get("X-VYPER-Agent-API-Key") or request.headers.get("X-VYPER-API-Key")
+	agent_device_id = request.headers.get("X-VYPER-Agent-Device-Id")
+	if agent_api_key:
+		authorization["agent_api_key"] = agent_api_key
+	if agent_device_id:
+		authorization["agent_device_id"] = agent_device_id
 	result = agent_gateway.dispatch(target=payload.target, authorization=authorization, dry_run=payload.dry_run)
 	job = persist_job(db, result=result, authorization=authorization, requested_dry_run=payload.dry_run, actor=request.headers.get("X-VYPER-Actor"))
 	db.commit()

@@ -6,6 +6,7 @@ import pytest
 
 from agent.agent import VYPERAgent
 from agent.common import JobState, SanitizationStatus
+from agent.credentials import AgentCredentialStore
 from agent.policy import PolicyDecision
 from agent.profiler import DeviceProfile
 from agent.verifier import VerificationResult
@@ -426,3 +427,59 @@ def test_evidence_generated_from_actual_workflow_results():
     assert result.evidence is not None
     assert result.evidence.execution["status"] == "RUNNING"
     assert result.evidence.verification["status"] == "INCONCLUSIVE"
+
+
+def test_agent_api_key_required_rejects_invalid_key_before_profiling(tmp_path):
+    store = AgentCredentialStore(root=tmp_path)
+    store.generate()
+    profiler_calls = []
+
+    class TrackingProfiler:
+        def profile(self, target):
+            profiler_calls.append(target)
+            return _profile("HDD")
+
+    agent = VYPERAgent(
+        profiler=TrackingProfiler(),
+        policy_engine=StubPolicyEngine(decision=_decision("HDD_OVERWRITE", "HDD")),
+        verifier=StubVerifier(result=_verification(SanitizationStatus.VERIFIED, True)),
+        credential_store=store,
+        api_key_required=True,
+    )
+
+    result = agent.sanitize_device("/dev/sdx", authorization={"approved": True, "agent_api_key": "wrong"}, dry_run=False)
+
+    assert result.job_state == JobState.FAILED
+    assert result.execution is not None
+    assert "api key" in result.execution.message.lower()
+    assert profiler_calls == []
+
+
+def test_agent_api_key_required_allows_valid_key_to_continue(tmp_path):
+    store = AgentCredentialStore(root=tmp_path)
+    credentials = store.generate()
+    calls = []
+    profiler = StubProfiler(profile_result=_profile("HDD"))
+    policy = StubPolicyEngine(decision=_decision("HDD_OVERWRITE", "HDD"))
+    verifier = StubVerifier(result=_verification(SanitizationStatus.VERIFIED, True))
+    agent = VYPERAgent(
+        profiler=profiler,
+        policy_engine=policy,
+        verifier=verifier,
+        credential_store=store,
+        api_key_required=True,
+    )
+    agent._resolve_pathway = lambda pathway_name, dry_run: DummyPathway(_execution_result(SanitizationStatus.RUNNING, "HDD_OVERWRITE"), calls)
+
+    result = agent.sanitize_device(
+        "/dev/sdx",
+        authorization={
+            "approved": True,
+            "agent_api_key": credentials.api_key,
+            "agent_device_id": credentials.device_id,
+        },
+        dry_run=False,
+    )
+
+    assert result.job_state == JobState.VERIFIED
+    assert calls

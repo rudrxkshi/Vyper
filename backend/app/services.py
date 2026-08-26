@@ -23,6 +23,10 @@ def to_payload(value: Any) -> Any:
 
 def sanitize_authorization_payload(authorization: dict[str, Any]) -> dict[str, Any]:
     payload = dict(authorization or {})
+    for key in list(payload):
+        lowered = str(key).lower()
+        if "api_key" in lowered or "token" in lowered or "credential" in lowered:
+            payload[key] = "<redacted>"
     if payload.get("ata_password"):
         payload["has_ata_password"] = True
         payload["ata_password"] = "<redacted>"
