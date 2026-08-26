@@ -101,11 +101,11 @@ class Verifier:
         elif route in {"ATA_ERASE", "ATA_SECURE_ERASE"}:
             verification = self._verify_ata_erase(device_name, profile)
         elif route in {"CRYPTO_ERASE", "NVME_CRYPTO_ERASE"}:
-            verification = self._verify_nvme(device_name, profile, "CRYPTO_ERASE")
+            verification = self._verify_nvme(device_name, profile, "CRYPTO_ERASE", sanitization_result)
         elif route in {"BLOCK_ERASE", "NVME_BLOCK_ERASE"}:
-            verification = self._verify_nvme(device_name, profile, "BLOCK_ERASE")
+            verification = self._verify_nvme(device_name, profile, "BLOCK_ERASE", sanitization_result)
         elif route in {"NVME_OVERWRITE", "OVERWRITE"}:
-            verification = self._verify_nvme(device_name, profile, "OVERWRITE")
+            verification = self._verify_nvme(device_name, profile, "OVERWRITE", sanitization_result)
         else:
             verification = VerificationResult(
                 status=SanitizationStatus.UNSUPPORTED,
@@ -471,9 +471,24 @@ class Verifier:
             details="ATA verification is inconclusive because the output does not clearly confirm the expected final state.",
         )
 
-    def _verify_nvme(self, device: str, profile: Any, method: str) -> VerificationResult:
+    def _verify_nvme(self, device: str, profile: Any, method: str, sanitization_result: Any | None = None) -> VerificationResult:
+        execution_metadata = getattr(sanitization_result, "metadata", {}) if sanitization_result is not None else {}
+        execution_metadata = execution_metadata if isinstance(execution_metadata, dict) else {}
+        verification_target = str(execution_metadata.get("sanitize_target") or device)
+        if execution_metadata and (
+            execution_metadata.get("requested_namespace") != device
+            or execution_metadata.get("resolved_controller") != verification_target
+            or execution_metadata.get("sanitize_scope") != "controller"
+        ):
+            return self._nvme_result(
+                SanitizationStatus.INCONCLUSIVE, device, method, "scope_mismatch",
+                "NVMe verification is inconclusive because execution scope metadata is inconsistent.",
+                [], ["Namespace/controller execution metadata did not bind to the requested asset."],
+                ["Verification refuses to query a controller not bound to the selected namespace."],
+                {"verification_target": verification_target},
+            )
         try:
-            result = self.command_executor.run(sanitize_log_command(device), timeout=self.timeout)
+            result = self.command_executor.run(sanitize_log_command(verification_target), timeout=self.timeout)
         except FileNotFoundError:
             return self._nvme_result(
                 SanitizationStatus.FAILED, device, method, "failed", "NVMe verification failed because nvme-cli is unavailable.",
@@ -506,7 +521,7 @@ class Verifier:
             return self._nvme_result(
                 SanitizationStatus.INCONCLUSIVE, device, method, "unknown", "NVMe verification is inconclusive because sanitize-log JSON did not contain a valid SSTAT value.",
                 ["The NVMe sanitize log did not provide a parseable structured SSTAT value."], [],
-                ["Only a controller-reported successful SSTAT can support a VERIFIED result."], {"raw": output},
+                ["Only a controller-reported successful SSTAT can support a VERIFIED result."], {"raw": output, "verification_target": verification_target},
             )
 
         observed = parsed["status"]
@@ -514,7 +529,7 @@ class Verifier:
             return self._nvme_result(
                 SanitizationStatus.VERIFIED, device, method, "completed", "NVMe verification observed controller-reported successful sanitize completion.",
                 ["Controller-reported completion is evidence of success, not a guarantee of every physical sector."], [],
-                ["Verification is based on controller-reported sanitize completion and does not prove every physical sector was sanitized.", "The sanitize-log JSON interface does not provide a documented stable field for validating the requested sanitize action.", "The parsed global_data_erased bit is recorded as evidence only and is not used to validate the requested sanitize method."], parsed,
+                ["Verification is based on controller-reported sanitize completion and does not prove every physical sector was sanitized.", "The sanitize-log JSON interface does not provide a documented stable field for validating the requested sanitize action.", "The parsed global_data_erased bit is recorded as evidence only and is not used to validate the requested sanitize method."], {**parsed, "verification_target": verification_target, "requested_namespace": device},
             )
         if observed == "IN_PROGRESS":
             return self._nvme_result(

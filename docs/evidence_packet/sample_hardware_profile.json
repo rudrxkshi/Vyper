@@ -1,0 +1,13 @@
+{
+  "illustrative_only": true,
+  "device_path": "/dev/disk/by-id/virtual-demo-disk",
+  "device_type": "HDD",
+  "model": "Disposable Virtual Disk",
+  "serial_number": "DEMO-0001",
+  "size_bytes": 5368709120,
+  "interface": "ATA/SATA",
+  "transport": "SATA",
+  "mounted": false,
+  "is_system_device": false,
+  "eligible_for_sanitization": true
+}

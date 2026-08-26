@@ -1,0 +1,27 @@
+[Unit]
+Description=VYPER unprivileged local web console
+After=local-fs.target vyper-agent.service
+Requires=vyper-agent.service
+
+[Service]
+Type=simple
+User=vyper-ui
+Group=vyper-ui
+WorkingDirectory=/opt/vyper/ui
+Environment=VYPER_CONFIG_PATH=/etc/vyper/config.toml
+Environment=VYPER_UI_PATH=/opt/vyper/ui
+ExecStart=/opt/vyper/runtime/bin/vyper-console
+Restart=on-failure
+RestartSec=5s
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

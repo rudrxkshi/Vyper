@@ -1,0 +1,24 @@
+{
+  "boot_job_id": "d4e5b2d5-58c3-4237-a6ff-3c9eb7afb4f3",
+  "target": "/dev/sda",
+  "target_identity_after": {
+    "model": "VBOX HARDDISK",
+    "serial_number": "VBd5a89b2f-1feeb206",
+    "size_bytes": 26843545600,
+    "rotational": true
+  },
+  "target_identity_matches_original": true,
+  "preservation_sentinel": {
+    "path": "/home/yash/STAGE10_DRY_RUN_PRESERVATION.txt",
+    "sha256_before": "cbafdc6c5f61b3531c50bbed45f0f3e8254e2a515890c666b28530d25272ebcb",
+    "sha256_after": "cbafdc6c5f61b3531c50bbed45f0f3e8254e2a515890c666b28530d25272ebcb",
+    "unchanged": true
+  },
+  "engine_bytes_written": 0,
+  "grub_default_before": "0",
+  "grub_default_after": "0",
+  "grub_next_entry_after": "",
+  "dry_run_final_status": "INCONCLUSIVE",
+  "successful_sanitization_claim": false,
+  "destructive_execution_performed": false
+}

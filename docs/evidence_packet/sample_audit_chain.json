@@ -1,0 +1,16 @@
+{
+  "illustrative_only": true,
+  "events": [
+    {
+      "action": "REMOTE_JOB_REQUESTED",
+      "previous_hash": null,
+      "event_hash": "illustrative-event-hash-1"
+    },
+    {
+      "action": "RESULT_ACCEPTED",
+      "previous_hash": "illustrative-event-hash-1",
+      "event_hash": "illustrative-event-hash-2"
+    }
+  ],
+  "claim": "Application-level tamper-evident chain; not tamper-proof."
+}

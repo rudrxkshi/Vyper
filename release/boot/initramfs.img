@@ -1,0 +1,9 @@
+VYPER-TEST-INITRAMFS
+hdparm
+nvme
+lsblk
+findmnt
+swapon
+pvs
+local_agent
+python

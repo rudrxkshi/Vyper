@@ -1,0 +1,11 @@
+[vyper]
+central_api_url = ""
+local_agent_bind = "127.0.0.1"
+local_agent_port = 8765
+local_console_bind = "127.0.0.1"
+local_console_port = 8787
+sync_enabled = false
+heartbeat_interval = 30
+inventory_interval = 60
+job_poll_interval = 5
+log_level = "INFO"

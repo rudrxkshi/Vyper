@@ -1,0 +1,11 @@
+.git
+.venv
+**/__pycache__
+**/*.pyc
+frontend/user-dashboard/node_modules
+frontend/user-dashboard/.next
+frontend/user-dashboard/out
+release
+secrets
+*.db
+.env*

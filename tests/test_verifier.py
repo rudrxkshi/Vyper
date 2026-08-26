@@ -228,6 +228,26 @@ def test_nvme_sanitize_completed_is_verified():
     assert result.evidence["status"] == "COMPLETED"
 
 
+def test_nvme_sanitize_log_uses_bound_controller_target():
+    from agent.common import SanitizationResult
+
+    calls = []
+    class Executor:
+        def run(self, command, timeout=None, cwd=None):
+            calls.append(list(command))
+            return SimpleNamespace(success=True, exit_code=0, stdout=_sanitize_log_json(1, "Completed Successfully"), stderr="", dry_run=False, metadata={})
+
+    execution = SanitizationResult(status=SanitizationStatus.RUNNING, target_device="/dev/nvme0n1", dry_run=False,
+        metadata={"requested_namespace": "/dev/nvme0n1", "resolved_controller": "/dev/nvme0",
+            "sanitize_target": "/dev/nvme0", "sanitize_scope": "controller"})
+    result = Verifier(command_executor=Executor()).verify(device="/dev/nvme0n1", pathway="CRYPTO_ERASE",
+        profile=_nvme_profile(), sanitization_result=execution)
+    assert result.status == SanitizationStatus.VERIFIED
+    assert calls == [["nvme", "sanitize-log", "/dev/nvme0", "--output-format=json"]]
+    assert result.evidence["requested_namespace"] == "/dev/nvme0n1"
+    assert result.evidence["verification_target"] == "/dev/nvme0"
+
+
 def test_nvme_sanitize_in_progress_is_inconclusive():
     class Executor:
         def run(self, command, timeout=None, cwd=None):

@@ -1,0 +1,27 @@
+{
+  "validation_mode": "virtualbox_system_disk",
+  "destructive_test_enabled": true,
+  "virtualbox": {
+    "version": "7.2.14r174565",
+    "vm_name": "vyper-stage11-disposable",
+    "vm_uuid": "de466510-ddae-4c3b-b1e1-adb5bb7482f1",
+    "target_vdi_uuid": "374dbc03-9afd-41b3-ba0d-cb290821faec",
+    "evidence_vdi_uuid": "fd688823-928f-4327-942b-03873123731e",
+    "physical_passthrough": false,
+    "shared_media": false
+  },
+  "allowed_target_identity": {
+    "device_type": "HDD",
+    "model": "VBOX HARDDISK",
+    "serial_number": "VB374dbc03-ecfa2108",
+    "size_bytes": 26843545600
+  },
+  "evidence_disk_identity": {
+    "device_type": "HDD",
+    "model": "VBOX HARDDISK",
+    "serial_number": "VBfd688823-1e732331",
+    "size_bytes": 5368709120,
+    "filesystem_uuid": "bd3e0b84-fe74-4f04-ad62-cf80c21eeee5",
+    "filesystem_label": "VYPER_STAGE11_EV"
+  }
+}

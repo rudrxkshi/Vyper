@@ -1,0 +1,137 @@
+{
+  "agent_id": null,
+  "boot_artifact_validation": {
+    "blockers": [],
+    "boot_environment_version": "0.8.0-rc1",
+    "build_kind": "ubuntu-debian-initramfs-tools",
+    "included_components": [
+      "local_agent/boot_console.py",
+      "local_agent/boot_sanitize.py",
+      "agent/agent.py",
+      "python",
+      "lsblk",
+      "findmnt",
+      "swapon",
+      "pvs",
+      "hdparm",
+      "nvme"
+    ],
+    "initramfs_sha256": "d179ccee0e24d40941af2a5e658b4123b39e85a5e3fd021f1c2065ba7a218c6c",
+    "kernel_version": "7.0.0-30-generic",
+    "missing_components": [],
+    "status": "PASS"
+  },
+  "boot_image_hash": "d179ccee0e24d40941af2a5e658b4123b39e85a5e3fd021f1c2065ba7a218c6c",
+  "boot_image_version": "0.8.0-rc1",
+  "boot_job_id": "64f84259-5680-4105-b67b-1d23ac2cbc20",
+  "boot_job_lifecycle": [
+    {
+      "state": "PREPARING_BOOT",
+      "timestamp": "2026-08-25T15:06:22.337985Z"
+    },
+    {
+      "state": "AWAITING_REBOOT",
+      "timestamp": "2026-08-25T15:06:26.122087Z"
+    },
+    {
+      "state": "BOOT_ENVIRONMENT_STARTED",
+      "timestamp": "2026-08-25T15:08:40.061402Z"
+    },
+    {
+      "state": "VALIDATING_TARGET",
+      "timestamp": "2026-08-25T15:08:40.090418Z"
+    },
+    {
+      "state": "WAITING_LOCAL_APPROVAL",
+      "timestamp": "2026-08-25T15:08:40.625945Z"
+    },
+    {
+      "state": "RUNNING",
+      "timestamp": "2026-08-25T15:08:40.626490Z"
+    },
+    {
+      "state": "VERIFYING",
+      "timestamp": "2026-08-25T15:08:40.640863Z"
+    },
+    {
+      "state": "INCONCLUSIVE",
+      "timestamp": "2026-08-25T15:08:40.642415Z"
+    }
+  ],
+  "central_job_id": null,
+  "central_upload_state": "RETAINED_OFFLINE",
+  "certificate_hash": "7f09428613362c8d53e0829fc2a5e05b94b1f0f176237a964f56ee0174f712ee",
+  "conclusion_statement": "boot workflow validation passed; disk sanitization was not executed",
+  "evidence_disk_identity": {
+    "device_type": "HDD",
+    "model": "vbox harddisk",
+    "nvme_eui64": null,
+    "nvme_nguid": null,
+    "serial_number": "vbfd688823-1e732331",
+    "size_bytes": 5368709120,
+    "wwn": "t10.ata     vbox harddisk                           vbfd688823-1e732331"
+  },
+  "evidence_hash": "85e281a46534b26ac4ecfb828ddc144747b30dcf37b40d0544f76eb428c3a349",
+  "execution_environment": "boot_sanitize",
+  "final_conclusion": "PASS",
+  "generated_at": "2026-08-25T15:08:40.643410Z",
+  "grub_handoff_status": {
+    "applied": true,
+    "configuration": "#!/bin/sh\nexec tail -n +3 $0\nmenuentry 'VYPER Boot Sanitize' --id vyper-boot-sanitize {\n    linux /boot/vyper/jobs/64f84259-5680-4105-b67b-1d23ac2cbc20/vmlinuz vyper.mode=boot_sanitize vyper.boot_job=64f84259-5680-4105-b67b-1d23ac2cbc20 noresume rd.shell=0\n    initrd /boot/vyper/jobs/64f84259-5680-4105-b67b-1d23ac2cbc20/initramfs.img\n}\n",
+    "current_default_entry": null,
+    "entry_name": "VYPER Boot Sanitize",
+    "mechanism": "grub2-one-shot",
+    "next_entry": "VYPER Boot Sanitize",
+    "normal_default_unchanged": true,
+    "secure_boot_state": "UNKNOWN"
+  },
+  "host_virtualization": {
+    "product_name": "VirtualBox",
+    "system_vendor": "innotek GmbH",
+    "virtualbox_proven": true,
+    "virtualization_type": "oracle"
+  },
+  "local_job_id": "64f84259-5680-4105-b67b-1d23ac2cbc20",
+  "mode": "dry-run",
+  "post_checks": {},
+  "result_preservation": "RETAINED_OFFLINE",
+  "sanitization_validation": "NOT_EXECUTED",
+  "schema_version": 1,
+  "selected_pathway": "HDD_OVERWRITE",
+  "target_identity": {
+    "device_type": "HDD",
+    "model": "vbox harddisk",
+    "nvme_eui64": null,
+    "nvme_nguid": null,
+    "serial_number": "vb374dbc03-ecfa2108",
+    "size_bytes": 26843545600,
+    "wwn": "t10.ata     vbox harddisk                           vb374dbc03-ecfa2108"
+  },
+  "validation_kind": "system_disk_virtualbox",
+  "verification": {
+    "bytes_checked": 0,
+    "details": "verification source=orchestrator, status=INCONCLUSIVE",
+    "device": "/dev/sda",
+    "errors": [],
+    "evidence": {
+      "source": "orchestrator",
+      "status": "INCONCLUSIVE"
+    },
+    "limitations": [
+      "Dry-run mode intentionally avoids destructive operations and verification claims."
+    ],
+    "message": "Dry-run execution does not provide verification evidence.",
+    "metadata": {},
+    "pathway": "HDD_OVERWRITE",
+    "samples_checked": 0,
+    "samples_failed": 0,
+    "samples_passed": 0,
+    "status": "INCONCLUSIVE",
+    "verification_time": null,
+    "verified": false,
+    "warnings": []
+  },
+  "vm_platform": "VirtualBox",
+  "vyper_version": "0.8.0-rc1",
+  "workflow_validation": "PASS"
+}

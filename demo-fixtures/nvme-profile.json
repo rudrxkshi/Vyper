@@ -1,0 +1,1 @@
+{"fixture":true,"device":"/dev/nvme9n1","controller":"/dev/nvme9","model":"VYPER DEMO NVME","serial_number":"DEMO-NVME-001","nguid":"00000000000000000000000000000001","namespace_count":1,"sanicap":{"crypto_erase":true,"block_erase":true,"overwrite":true},"system_disk":false,"mounted":false}

@@ -1,0 +1,214 @@
+{
+  "agent_id": null,
+  "archived_artifact_hashes": {
+    "boot_validation_log_sha256": "d06e51b7783fc0947a35223adc5fd6cd1660b9ac70a55e4ba590212f37b99b4d",
+    "execution_result_sha256": "b5307ad5631dfe0adca8e09c809994c10d705ff028cb66320346c5f03db3075b"
+  },
+  "boot_artifact_validation": {
+    "blockers": [],
+    "boot_environment_version": "0.8.0-rc1",
+    "build_kind": "ubuntu-debian-initramfs-tools",
+    "included_components": [
+      "local_agent/boot_console.py",
+      "local_agent/boot_sanitize.py",
+      "agent/agent.py",
+      "python",
+      "lsblk",
+      "findmnt",
+      "swapon",
+      "pvs",
+      "hdparm",
+      "nvme"
+    ],
+    "initramfs_sha256": "d179ccee0e24d40941af2a5e658b4123b39e85a5e3fd021f1c2065ba7a218c6c",
+    "kernel_version": "7.0.0-30-generic",
+    "missing_components": [],
+    "status": "PASS"
+  },
+  "boot_image_hash": "d179ccee0e24d40941af2a5e658b4123b39e85a5e3fd021f1c2065ba7a218c6c",
+  "boot_image_version": "0.8.0-rc1",
+  "boot_job_id": "4edb1d85-ba87-4ee2-90d6-48808f00eaa6",
+  "boot_job_lifecycle": [
+    {
+      "state": "PREPARING_BOOT",
+      "timestamp": "2026-08-25T15:11:11.576931Z"
+    },
+    {
+      "state": "AWAITING_REBOOT",
+      "timestamp": "2026-08-25T15:11:15.129613Z"
+    },
+    {
+      "state": "BOOT_ENVIRONMENT_STARTED",
+      "timestamp": "2026-08-25T15:14:45.042179Z"
+    },
+    {
+      "state": "VALIDATING_TARGET",
+      "timestamp": "2026-08-25T15:14:45.076936Z"
+    },
+    {
+      "state": "WAITING_LOCAL_APPROVAL",
+      "timestamp": "2026-08-25T15:14:45.467753Z"
+    },
+    {
+      "state": "RUNNING",
+      "timestamp": "2026-08-25T15:14:45.468227Z"
+    },
+    {
+      "state": "VERIFYING",
+      "timestamp": "2026-08-25T15:20:38.818904Z"
+    },
+    {
+      "state": "VERIFIED",
+      "timestamp": "2026-08-25T15:20:38.824432Z"
+    }
+  ],
+  "bytes_written": 26843545600,
+  "central_job_id": null,
+  "central_upload_state": "RETAINED_OFFLINE",
+  "certificate_hash": "5dfd721c82cc5db8434564a76df1ca221780068f5ede199644a41ca05e77fb37",
+  "conclusion_statement": "boot workflow and sanitization validation passed",
+  "evidence_disk_identity": {
+    "device_type": "HDD",
+    "model": "vbox harddisk",
+    "nvme_eui64": null,
+    "nvme_nguid": null,
+    "serial_number": "vbfd688823-1e732331",
+    "size_bytes": 5368709120,
+    "wwn": "t10.ata     vbox harddisk                           vbfd688823-1e732331"
+  },
+  "evidence_hash": "185e79cabb29e83f04c6bff48750f33314c5c4b6d8857977a08d80741591605e",
+  "execution_environment": "boot_sanitize",
+  "final_conclusion": "PASS",
+  "generated_at": "2026-08-25T15:20:38.826642Z",
+  "grub_handoff_status": {
+    "applied": true,
+    "configuration": "#!/bin/sh\nexec tail -n +3 $0\nmenuentry 'VYPER Boot Sanitize' --id vyper-boot-sanitize {\n    linux /boot/vyper/jobs/4edb1d85-ba87-4ee2-90d6-48808f00eaa6/vmlinuz vyper.mode=boot_sanitize vyper.boot_job=4edb1d85-ba87-4ee2-90d6-48808f00eaa6 noresume rd.shell=0\n    initrd /boot/vyper/jobs/4edb1d85-ba87-4ee2-90d6-48808f00eaa6/initramfs.img\n}\n",
+    "current_default_entry": null,
+    "entry_name": "VYPER Boot Sanitize",
+    "mechanism": "grub2-one-shot",
+    "next_entry": "VYPER Boot Sanitize",
+    "normal_default_unchanged": true,
+    "secure_boot_state": "UNKNOWN"
+  },
+  "host_virtualization": {
+    "product_name": "VirtualBox",
+    "system_vendor": "innotek GmbH",
+    "virtualbox_proven": true,
+    "virtualization_type": "oracle"
+  },
+  "local_job_id": "4edb1d85-ba87-4ee2-90d6-48808f00eaa6",
+  "mode": "destructive",
+  "physical_media_validation": "NOT_APPLICABLE",
+  "post_checks": {
+    "evidence_mount": {
+      "device": "/dev/sdd",
+      "filesystem_uuid": "bd3e0b84-fe74-4f04-ad62-cf80c21eeee5",
+      "mode": "ro,norecovery"
+    },
+    "filesystem_detected": false,
+    "inspection_vm": {
+      "evidence_device": "/dev/sdd",
+      "name": "vyper-stage11-inspector",
+      "target_device": "/dev/sdc",
+      "uuid": "3774cb52-a069-43b6-94f7-d72f450b5600"
+    },
+    "old_ubuntu_bootable": false,
+    "partition_table_detected": false,
+    "sample_method": "read-only cmp against /dev/zero; no harness dd",
+    "samples": [
+      {
+        "all_zero": true,
+        "length": 4096,
+        "offset": 0,
+        "region": "beginning"
+      },
+      {
+        "all_zero": true,
+        "length": 4096,
+        "offset": 13421772800,
+        "region": "middle"
+      },
+      {
+        "all_zero": true,
+        "length": 4096,
+        "offset": 26843541504,
+        "region": "end"
+      }
+    ],
+    "sentinel_accessible": false,
+    "target_identity_match": true,
+    "target_model": "VBOX HARDDISK",
+    "target_mounted": false,
+    "target_serial": "VB374dbc03-ecfa2108",
+    "target_size_bytes": 26843545600
+  },
+  "result_preservation": "RETAINED_OFFLINE",
+  "sanitization_validation": "PASS",
+  "schema_version": 1,
+  "selected_pathway": "HDD_OVERWRITE",
+  "sentinel_status": {
+    "accessible": false,
+    "pre_wipe_sha256": "43eb0ca1aec5a29fa8325b6d44d20232377414f7afd8e78338f6458e96f7176a"
+  },
+  "target_identity": {
+    "device_type": "HDD",
+    "model": "vbox harddisk",
+    "nvme_eui64": null,
+    "nvme_nguid": null,
+    "serial_number": "vb374dbc03-ecfa2108",
+    "size_bytes": 26843545600,
+    "wwn": "t10.ata     vbox harddisk                           vb374dbc03-ecfa2108"
+  },
+  "validation_kind": "system_disk_virtualbox",
+  "verification": {
+    "bytes_checked": 32768,
+    "details": "HDD verification observed zero-filled samples; this is evidence, not absolute proof of full physical sanitization.",
+    "device": "/dev/sda",
+    "errors": [],
+    "evidence": {
+      "bytes_checked": 32768,
+      "samples_checked": 8,
+      "samples_failed": 0,
+      "samples_passed": 8,
+      "source": "hdd_zero_sampling",
+      "status": "verified"
+    },
+    "limitations": [
+      "Verification is evidence-based sampling only and not a full physical-sector guarantee."
+    ],
+    "message": "HDD verification observed zero-filled samples; this is evidence, not absolute proof of full physical sanitization.",
+    "metadata": {
+      "bytes_checked": 32768,
+      "samples_checked": 8,
+      "samples_failed": 0,
+      "samples_passed": 8,
+      "source": "hdd_zero_sampling",
+      "status": "verified"
+    },
+    "pathway": "HDD_OVERWRITE",
+    "samples_checked": 8,
+    "samples_failed": 0,
+    "samples_passed": 8,
+    "status": "VERIFIED",
+    "verification_time": 0.018229850000011538,
+    "verified": true,
+    "warnings": [
+      "Sampled read-only verification confirms the observed zero pattern, but does not prove every physical sector contains zeros."
+    ]
+  },
+  "virtual_disk_sanitization_validation": "PASS",
+  "vm_identity": {
+    "evidence_disk_uuid": "fd688823-928f-4327-942b-03873123731e",
+    "name": "vyper-stage11-disposable",
+    "system_disk_uuid": "374dbc03-9afd-41b3-ba0d-cb290821faec",
+    "uuid": "de466510-ddae-4c3b-b1e1-adb5bb7482f1",
+    "virtualbox_version": "7.2.14r174565"
+  },
+  "vm_platform": "VirtualBox",
+  "vyper_version": "0.8.0-rc1",
+  "warnings": [
+    "VirtualBox validates virtual block-device behavior, not physical magnetic-media sanitization.",
+    "The VYPER boot console completed evidence synchronization and requested shutdown, but VirtualBox remained running; the VM was powered off from the host only after the evidence disk was synchronized."
+  ],
+  "workflow_validation": "PASS"
+}

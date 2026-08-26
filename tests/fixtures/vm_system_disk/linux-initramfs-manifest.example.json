@@ -1,0 +1,18 @@
+{
+  "product": "VYPER Boot Sanitize Environment",
+  "version": "1.0.0-rc1",
+  "platform": "linux",
+  "architecture": "x86_64",
+  "kernel_version": "6.8.0-example-generic",
+  "kernel_filename": "vmlinuz",
+  "initramfs_filename": "initramfs.img",
+  "kernel_sha256": "REPLACE_WITH_UBUNTU_BUILD_SHA256",
+  "initramfs_sha256": "REPLACE_WITH_UBUNTU_BUILD_SHA256",
+  "bootable": false,
+  "build_kind": "documentation-example-not-validated",
+  "validated_with_lsinitramfs": false,
+  "contains_agent_credentials": false,
+  "contains_operator_secrets": false,
+  "mock_fixture": true,
+  "limitation": "A real bootable manifest must be generated and validated inside Ubuntu; this Windows-repository example is intentionally non-bootable."
+}

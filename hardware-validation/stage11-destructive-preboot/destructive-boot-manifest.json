@@ -1,0 +1,95 @@
+{
+  "integrity": {
+    "algorithm": "HMAC-SHA256",
+    "key_id": "local-boot-job-v1",
+    "mac": "728fdcc529f81e90d81e24cae40d42bfacf14ed3776bc2c630e18b58d16ee8a4"
+  },
+  "payload": {
+    "agent_id": null,
+    "ata_password_transfer": "NOT_STORED_REENTER_IN_BOOT_ENVIRONMENT",
+    "authorization_state": "LOCAL_PREPARED",
+    "boot_image_sha256": "d179ccee0e24d40941af2a5e658b4123b39e85a5e3fd021f1c2065ba7a218c6c",
+    "boot_image_version": "0.8.0-rc1",
+    "boot_job_id": "4edb1d85-ba87-4ee2-90d6-48808f00eaa6",
+    "central_api_url": null,
+    "central_job_id": null,
+    "created_at": "2026-08-25T15:11:11.576931Z",
+    "dry_run": false,
+    "execution_mode": "boot_sanitize",
+    "expected_device_identifiers": {
+      "device_type": "HDD",
+      "model": "vbox harddisk",
+      "nvme_eui64": null,
+      "nvme_nguid": null,
+      "serial_number": "vb374dbc03-ecfa2108",
+      "size_bytes": 26843545600,
+      "wwn": "t10.ata     vbox harddisk                           vb374dbc03-ecfa2108"
+    },
+    "expires_at": "2026-08-25T16:11:11.576931Z",
+    "job_nonce": "l6XaZW3VDMBHNSo5R5tcLVW_F3ktwudHSv0j3v808xU",
+    "local_confirmation_state": "REQUIRED_IN_BOOT_ENVIRONMENT",
+    "requested_asset_identity": "64ba3bd359f9d447c590bd04036beeb2f0d904d3c573b5f5f3b94349db63bd50",
+    "requested_method": "POLICY",
+    "schema_version": "1",
+    "vm_validation": {
+      "allow_destructive_vm_test": true,
+      "allowed_target_identity": {
+        "device_type": "HDD",
+        "model": "vbox harddisk",
+        "nvme_eui64": null,
+        "nvme_nguid": null,
+        "serial_number": "vb374dbc03-ecfa2108",
+        "size_bytes": 26843545600,
+        "wwn": null
+      },
+      "boot_artifact_validation": {
+        "blockers": [],
+        "boot_environment_version": "0.8.0-rc1",
+        "build_kind": "ubuntu-debian-initramfs-tools",
+        "included_components": [
+          "local_agent/boot_console.py",
+          "local_agent/boot_sanitize.py",
+          "agent/agent.py",
+          "python",
+          "lsblk",
+          "findmnt",
+          "swapon",
+          "pvs",
+          "hdparm",
+          "nvme"
+        ],
+        "initramfs_sha256": "d179ccee0e24d40941af2a5e658b4123b39e85a5e3fd021f1c2065ba7a218c6c",
+        "kernel_version": "7.0.0-30-generic",
+        "missing_components": [],
+        "status": "PASS"
+      },
+      "destructive_test_enabled": true,
+      "evidence_disk_identity": {
+        "device_type": "HDD",
+        "model": "vbox harddisk",
+        "nvme_eui64": null,
+        "nvme_nguid": null,
+        "serial_number": "vbfd688823-1e732331",
+        "size_bytes": 5368709120,
+        "wwn": null
+      },
+      "preparation_virtualization": {
+        "product_name": "VirtualBox",
+        "system_vendor": "innotek GmbH",
+        "virtualbox_proven": true,
+        "virtualization_type": "oracle"
+      },
+      "prepared_target_was_system_disk": true,
+      "validation_mode": "virtualbox_system_disk",
+      "virtualbox": {
+        "evidence_vdi_uuid": "fd688823-928f-4327-942b-03873123731e",
+        "physical_passthrough": false,
+        "shared_media": false,
+        "target_vdi_uuid": "374dbc03-9afd-41b3-ba0d-cb290821faec",
+        "version": "7.2.14r174565",
+        "vm_name": "vyper-stage11-disposable",
+        "vm_uuid": "de466510-ddae-4c3b-b1e1-adb5bb7482f1"
+      }
+    }
+  }
+}

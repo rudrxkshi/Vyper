@@ -5,12 +5,15 @@ import hmac
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
+
+from vyper_version import __version__
 
 from agent.certificate import CertificateBuilder, SanitizationCertificate
 from agent.common import JobState, SanitizationResult, SanitizationStatus
 from agent.credentials import AgentCredentialStore, authorization_api_key
 from agent.evidence import EvidenceCollector, EvidenceRecord
+from agent.nvme_scope import NVMeControllerResolver
 from agent.pathways.ata_erase import ATAErasePathway
 from agent.pathways.hdd_overwrite import HDDOverwritePathway
 from agent.pathways.nvme_sanitize import NVMeSanitizePathway
@@ -33,6 +36,21 @@ class OrchestrationJobResult:
     message: str = ""
 
 
+class _ObservableStateHistory(list[JobState]):
+    def __init__(self, initial: list[JobState], callback: Callable[[JobState], None] | None) -> None:
+        super().__init__(initial)
+        self.callback = callback
+
+    def append(self, state: JobState) -> None:
+        super().append(state)
+        if self.callback is not None:
+            self.callback(state)
+
+    def extend(self, states) -> None:
+        for state in states:
+            self.append(state)
+
+
 class VYPERAgent:
     def __init__(
         self,
@@ -43,23 +61,46 @@ class VYPERAgent:
         verifier: Verifier | None = None,
         evidence_collector: EvidenceCollector | None = None,
         certificate_builder: CertificateBuilder | None = None,
+<<<<<<< HEAD
         credential_store: AgentCredentialStore | None = None,
         api_key_required: bool = False,
         expected_api_key: str | None = None,
+=======
+        nvme_scope_resolver: Callable[[str], dict[str, Any]] | None = None,
+>>>>>>> f92af61deccff4855c25365623da795ea1595f4a
     ) -> None:
         self.dry_run = dry_run
         self.profiler = profiler or DeviceProfiler(dry_run=dry_run)
         self.policy_engine = policy_engine or PolicyEngine(dry_run=dry_run)
         self.verifier = verifier or Verifier(dry_run=dry_run)
-        self.evidence_collector = evidence_collector or EvidenceCollector(dry_run=dry_run, agent_version="vyper-agent")
+        self.evidence_collector = evidence_collector or EvidenceCollector(
+            dry_run=dry_run, agent_version=f"vyper-agent/{__version__}"
+        )
         self.certificate_builder = certificate_builder or CertificateBuilder()
+<<<<<<< HEAD
         self.credential_store = credential_store or AgentCredentialStore()
         self.api_key_required = bool(api_key_required)
         self.expected_api_key = expected_api_key
+=======
+        resolver = NVMeControllerResolver(
+            profiler=self.profiler,
+            command_executor=getattr(self.profiler, "command_executor", None),
+            sysfs_root=getattr(self.profiler, "sysfs_root", "/sys"),
+        )
+        self.nvme_scope_resolver = nvme_scope_resolver or resolver.resolve
+>>>>>>> f92af61deccff4855c25365623da795ea1595f4a
 
-    def sanitize_device(self, target: str, authorization: Any, dry_run: bool | None = None) -> OrchestrationJobResult:
+    def sanitize_device(
+        self,
+        target: str,
+        authorization: Any,
+        dry_run: bool | None = None,
+        *,
+        event_callback: Callable[[JobState], None] | None = None,
+        progress_callback: Callable[[Any], None] | None = None,
+    ) -> OrchestrationJobResult:
         effective_dry_run = self.dry_run if dry_run is None else bool(dry_run)
-        state_history: list[JobState] = [JobState.PENDING]
+        state_history: list[JobState] = _ObservableStateHistory([JobState.PENDING], event_callback)
         now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         if self._api_key_verification_enabled():
@@ -272,7 +313,63 @@ class VYPERAgent:
             )
 
         pathway_name = str(policy.selected_pathway or "").upper()
-        pathway = self._resolve_pathway(pathway_name, effective_dry_run)
+        compatibility_issue = self._pathway_compatibility_issue(pathway_name, profile)
+        if compatibility_issue:
+            if compatibility_issue not in policy.limitations:
+                policy.limitations.append(compatibility_issue)
+            execution = SanitizationResult(
+                status=SanitizationStatus.UNSUPPORTED,
+                target_device=cleaned_target,
+                dry_run=effective_dry_run,
+                message=compatibility_issue,
+                metadata={
+                    "method": "UNSUPPORTED",
+                    "requested_method": pathway_name,
+                    "device_type": profile.device_type,
+                    "start_time": started_at,
+                    "end_time": now_iso,
+                    "duration_seconds": 0.0,
+                },
+            )
+            verification = self._verification_placeholder(
+                target=cleaned_target,
+                pathway=pathway_name,
+                status=SanitizationStatus.UNSUPPORTED,
+                verified=False,
+                message="Verification skipped because no compatible implemented pathway is available.",
+                limitations=[compatibility_issue],
+            )
+            state_history.append(JobState.UNSUPPORTED)
+            evidence = self._build_evidence(
+                profile,
+                policy,
+                execution,
+                verification,
+                started_at=started_at,
+                completed_at=now_iso,
+            )
+            certificate = self.certificate_builder.build(evidence)
+            return OrchestrationJobResult(
+                job_state=JobState.UNSUPPORTED,
+                state_history=state_history,
+                target=cleaned_target,
+                profile=profile,
+                policy=policy,
+                execution=execution,
+                verification=verification,
+                evidence=evidence,
+                certificate=certificate,
+                message=compatibility_issue,
+            )
+
+        if progress_callback is None:
+            pathway = self._resolve_pathway(pathway_name, effective_dry_run)
+        else:
+            pathway = self._resolve_pathway(
+                pathway_name,
+                effective_dry_run,
+                progress_callback=progress_callback,
+            )
         if pathway is None:
             execution = SanitizationResult(
                 status=SanitizationStatus.UNSUPPORTED,
@@ -428,6 +525,7 @@ class VYPERAgent:
             message="Workflow completed.",
         )
 
+<<<<<<< HEAD
     def _api_key_verification_enabled(self) -> bool:
         return bool(self.api_key_required or self.expected_api_key)
 
@@ -485,12 +583,44 @@ class VYPERAgent:
         )
 
     def _resolve_pathway(self, pathway_name: str, dry_run: bool):
+=======
+    def _resolve_pathway(self, pathway_name: str, dry_run: bool, *, progress_callback=None):
+>>>>>>> f92af61deccff4855c25365623da795ea1595f4a
         if pathway_name == "HDD_OVERWRITE":
-            return HDDOverwritePathway(dry_run=dry_run)
+            return HDDOverwritePathway(dry_run=dry_run, progress_callback=progress_callback)
         if pathway_name == "ATA_ERASE":
             return ATAErasePathway(dry_run=dry_run)
         if pathway_name in {"CRYPTO_ERASE", "BLOCK_ERASE", "NVME_OVERWRITE"}:
             return NVMeSanitizePathway(dry_run=dry_run)
+        return None
+
+    def _pathway_compatibility_issue(self, pathway_name: str, profile: DeviceProfile) -> str | None:
+        normalized_device_type = str(profile.device_type or "").strip().upper().replace("_", " ")
+
+        if pathway_name == "HDD_OVERWRITE" and normalized_device_type != "HDD":
+            return (
+                f"HDD_OVERWRITE is only implemented for HDD devices; "
+                f"the profiled device type is {profile.device_type!r}."
+            )
+
+        if pathway_name == "ATA_ERASE" and normalized_device_type not in {"HDD", "SATA SSD", "SSD"}:
+            return (
+                f"ATA_ERASE is only implemented for ATA/SATA HDD or SSD devices; "
+                f"the profiled device type is {profile.device_type!r}."
+            )
+
+        if pathway_name in {"CRYPTO_ERASE", "BLOCK_ERASE", "NVME_OVERWRITE"} and normalized_device_type != "NVME":
+            if pathway_name == "CRYPTO_ERASE" and normalized_device_type in {"SATA SSD", "SSD"}:
+                return (
+                    "CRYPTO_ERASE was selected for a SATA/ATA SSD, but no implemented "
+                    "evidence-backed SATA crypto erase pathway is available. NVMe sanitize "
+                    "will not be used, and ATA_ERASE will not be substituted."
+                )
+            return (
+                f"{pathway_name} is only implemented through the NVMe sanitize pathway; "
+                f"the profiled device type is {profile.device_type!r}."
+            )
+
         return None
 
     def _parse_authorization(self, authorization: Any) -> tuple[bool, str | None]:
@@ -519,6 +649,14 @@ class VYPERAgent:
         }
         if pathway_name in {"CRYPTO_ERASE", "BLOCK_ERASE", "NVME_OVERWRITE"}:
             kwargs["selected_method"] = pathway_name
+            try:
+                kwargs["controller_scope"] = self.nvme_scope_resolver(target)
+            except Exception as exc:
+                kwargs["controller_scope"] = {
+                    "scope_proven": False,
+                    "execution_eligible": False,
+                    "execution_blockers": [f"NVMe controller resolution failed safely: {type(exc).__name__}"],
+                }
         if pathway_name == "ATA_ERASE" and ata_password:
             kwargs["password"] = ata_password
         return pathway.execute(target, **kwargs)

@@ -1,0 +1,339 @@
+{
+  "agent_id": null,
+  "boot_environment_version": "0.8.0-rc1",
+  "boot_image_sha256": "d179ccee0e24d40941af2a5e658b4123b39e85a5e3fd021f1c2065ba7a218c6c",
+  "boot_job_id": "4edb1d85-ba87-4ee2-90d6-48808f00eaa6",
+  "central_job_id": null,
+  "certificate": {
+    "agent": {
+      "version": "vyper-agent/0.8.0-rc1"
+    },
+    "certificate_hash": "5dfd721c82cc5db8434564a76df1ca221780068f5ede199644a41ca05e77fb37",
+    "certificate_hash_algorithm": "sha256",
+    "certificate_id": "93bbe731-6154-4b4b-bb1f-fe775cbbbf2f",
+    "certificate_version": "1.0.0",
+    "device": {
+      "capacity_bytes": 26843545600,
+      "device_path": "/dev/sda",
+      "device_type": "HDD",
+      "interface": "ATA/SATA",
+      "model": "VBOX HARDDISK",
+      "serial": "VB374dbc03-ecfa2108",
+      "transport": null
+    },
+    "evidence_integrity": {
+      "algorithm": "sha256",
+      "hash": "185e79cabb29e83f04c6bff48750f33314c5c4b6d8857977a08d80741591605e"
+    },
+    "execution": {
+      "completed_at": "2026-08-25T15:20:38.816349Z",
+      "duration_seconds": 353.314737693,
+      "started_at": "2026-08-25T15:14:45.468545Z",
+      "status": "RUNNING"
+    },
+    "final_status": "VERIFIED",
+    "issued_at": "2026-08-25T15:20:38.817391Z",
+    "job_id": "37c98d32-6e32-49cc-8277-5ab8c8bb8298",
+    "outcome_kind": "sanitization_certificate",
+    "sanitization": {
+      "executed_pathway": "HDD_OVERWRITE",
+      "policy_reason": "Default HDD policy selects host-level overwrite unless ATA erase is explicitly enabled and available.",
+      "sanitization_method": "HDD_OVERWRITE",
+      "selected_pathway": "HDD_OVERWRITE"
+    },
+    "successful_sanitization_claim": true,
+    "verification": {
+      "errors": [],
+      "evidence": {
+        "bytes_checked": 32768,
+        "samples_checked": 8,
+        "samples_failed": 0,
+        "samples_passed": 8,
+        "source": "hdd_zero_sampling",
+        "status": "verified"
+      },
+      "limitations": [
+        "Verification is evidence-based sampling only and not a full physical-sector guarantee."
+      ],
+      "status": "VERIFIED",
+      "verified": true,
+      "warnings": [
+        "Sampled read-only verification confirms the observed zero pattern, but does not prove every physical sector contains zeros."
+      ]
+    }
+  },
+  "completed_at": "2026-08-25T15:20:38.819511Z",
+  "engine_evidence": {
+    "agent_version": "vyper-agent/0.8.0-rc1",
+    "completed_at": "2026-08-25T15:20:38.816349Z",
+    "device": "/dev/sda",
+    "device_profile": {
+      "capabilities": {
+        "hdparm_available": true,
+        "security": {
+          "enabled": false,
+          "frozen": false,
+          "raw_output": "/dev/sda:\n\nATA device, with non-removable media\n\tModel Number:       VBOX HARDDISK                           \n\tSerial Number:      VB374dbc03-ecfa2108 \n\tFirmware Revision:  1.0     \nStandards:\n\tUsed: ATA/ATAPI-6 published, ANSI INCITS 361-2002 \n\tSupported: 6 5 4 \nConfiguration:\n\tLogical\t\tmax\tcurrent\n\tcylinders\t16383\t16383\n\theads\t\t16\t16\n\tsectors/track\t63\t63\n\t--\n\tCHS current addressable sectors:    16514064\n\tLBA    user addressable sectors:    52428800\n\tLBA48  user addressable sectors:    52428800\n\tLogical/Physical Sector size:           512 bytes\n\tdevice size with M = 1024*1024:       25600 MBytes\n\tdevice size with M = 1000*1000:       26843 MBytes (26 GB)\n\tcache/buffer size  = 256 KBytes (type=DualPortCache)\nCapabilities:\n\tLBA, IORDY(cannot be disabled)\n\tQueue depth: 32\n\tStandby timer values: spec'd by Vendor, no device specific minimum\n\tR/W multiple sector transfer: Max = 128\tCurrent = 128\n\tDMA: mdma0 mdma1 mdma2 udma0 udma1 udma2 udma3 udma4 udma5 *udma6 \n\t     Cycle time: min=120ns recommended=120ns\n\tPIO: pio0 pio1 pio2 pio3 pio4 \n\t     Cycle time: no flow control=120ns  IORDY flow control=120ns\nCommands/features:\n\tEnabled\tSupported:\n\t   *\tPower Management feature set\n\t   *\tWrite cache\n\t   *\tLook-ahead\n\t   *\t48-bit Address feature set\n\t   *\tMandatory FLUSH_CACHE\n\t   *\tFLUSH_CACHE_EXT\n\t   *\tGen2 signaling speed (3.0Gb/s)\n\t   *\tNative Command Queueing (NCQ)\nChecksum: correct",
+          "secure_erase_supported": false,
+          "supported": false
+        },
+        "type": "ATA/SATA",
+        "wwn": "t10.ata     vbox harddisk                           vb374dbc03-ecfa2108"
+      },
+      "capacity_bytes": 26843545600,
+      "device_path": "/dev/sda",
+      "device_type": "HDD",
+      "interface": "ATA/SATA",
+      "is_system_device": false,
+      "model": "VBOX HARDDISK",
+      "mounted": false,
+      "serial": "VB374dbc03-ecfa2108",
+      "transport": null
+    },
+    "duration_seconds": 353.314737693,
+    "errors": [],
+    "execution": {
+      "dry_run": false,
+      "errors": [],
+      "message": "HDD overwrite executed to completion.",
+      "metadata": {
+        "bytes_written": 26843545600,
+        "device_type": "HDD",
+        "duration_seconds": 353.314737693,
+        "end_time": 464.121442181,
+        "method": "HDD_OVERWRITE",
+        "start_time": 110.806688468,
+        "throughput": 75976297.43745568,
+        "total_bytes": 26843545600
+      },
+      "status": "RUNNING",
+      "target_device": "/dev/sda",
+      "warnings": []
+    },
+    "final_status": "VERIFIED",
+    "integrity_algorithm": "sha256",
+    "integrity_hash": "185e79cabb29e83f04c6bff48750f33314c5c4b6d8857977a08d80741591605e",
+    "job_id": "37c98d32-6e32-49cc-8277-5ab8c8bb8298",
+    "limitations": [
+      "This is the default HDD pathway; ATA erase remains optional and must be explicitly selected.",
+      "Verification is evidence-based sampling only and not a full physical-sector guarantee."
+    ],
+    "pathway": {
+      "capability_evidence": {
+        "hdparm_available": true,
+        "security": {
+          "enabled": false,
+          "frozen": false,
+          "raw_output": "/dev/sda:\n\nATA device, with non-removable media\n\tModel Number:       VBOX HARDDISK                           \n\tSerial Number:      VB374dbc03-ecfa2108 \n\tFirmware Revision:  1.0     \nStandards:\n\tUsed: ATA/ATAPI-6 published, ANSI INCITS 361-2002 \n\tSupported: 6 5 4 \nConfiguration:\n\tLogical\t\tmax\tcurrent\n\tcylinders\t16383\t16383\n\theads\t\t16\t16\n\tsectors/track\t63\t63\n\t--\n\tCHS current addressable sectors:    16514064\n\tLBA    user addressable sectors:    52428800\n\tLBA48  user addressable sectors:    52428800\n\tLogical/Physical Sector size:           512 bytes\n\tdevice size with M = 1024*1024:       25600 MBytes\n\tdevice size with M = 1000*1000:       26843 MBytes (26 GB)\n\tcache/buffer size  = 256 KBytes (type=DualPortCache)\nCapabilities:\n\tLBA, IORDY(cannot be disabled)\n\tQueue depth: 32\n\tStandby timer values: spec'd by Vendor, no device specific minimum\n\tR/W multiple sector transfer: Max = 128\tCurrent = 128\n\tDMA: mdma0 mdma1 mdma2 udma0 udma1 udma2 udma3 udma4 udma5 *udma6 \n\t     Cycle time: min=120ns recommended=120ns\n\tPIO: pio0 pio1 pio2 pio3 pio4 \n\t     Cycle time: no flow control=120ns  IORDY flow control=120ns\nCommands/features:\n\tEnabled\tSupported:\n\t   *\tPower Management feature set\n\t   *\tWrite cache\n\t   *\tLook-ahead\n\t   *\t48-bit Address feature set\n\t   *\tMandatory FLUSH_CACHE\n\t   *\tFLUSH_CACHE_EXT\n\t   *\tGen2 signaling speed (3.0Gb/s)\n\t   *\tNative Command Queueing (NCQ)\nChecksum: correct",
+          "secure_erase_supported": false,
+          "supported": false
+        },
+        "type": "ATA/SATA",
+        "wwn": "t10.ata     vbox harddisk                           vb374dbc03-ecfa2108"
+      },
+      "discrepancy": null,
+      "executed_pathway": "HDD_OVERWRITE",
+      "policy_reason": "Default HDD policy selects host-level overwrite unless ATA erase is explicitly enabled and available.",
+      "sanitization_method": "HDD_OVERWRITE",
+      "selected_pathway": "HDD_OVERWRITE",
+      "verification_pathway": "HDD_OVERWRITE"
+    },
+    "policy_decision": {
+      "device_type": "HDD",
+      "limitations": [
+        "This is the default HDD pathway; ATA erase remains optional and must be explicitly selected."
+      ],
+      "metadata": {
+        "capabilities": {
+          "hdparm_available": true,
+          "security": {
+            "enabled": false,
+            "frozen": false,
+            "raw_output": "/dev/sda:\n\nATA device, with non-removable media\n\tModel Number:       VBOX HARDDISK                           \n\tSerial Number:      VB374dbc03-ecfa2108 \n\tFirmware Revision:  1.0     \nStandards:\n\tUsed: ATA/ATAPI-6 published, ANSI INCITS 361-2002 \n\tSupported: 6 5 4 \nConfiguration:\n\tLogical\t\tmax\tcurrent\n\tcylinders\t16383\t16383\n\theads\t\t16\t16\n\tsectors/track\t63\t63\n\t--\n\tCHS current addressable sectors:    16514064\n\tLBA    user addressable sectors:    52428800\n\tLBA48  user addressable sectors:    52428800\n\tLogical/Physical Sector size:           512 bytes\n\tdevice size with M = 1024*1024:       25600 MBytes\n\tdevice size with M = 1000*1000:       26843 MBytes (26 GB)\n\tcache/buffer size  = 256 KBytes (type=DualPortCache)\nCapabilities:\n\tLBA, IORDY(cannot be disabled)\n\tQueue depth: 32\n\tStandby timer values: spec'd by Vendor, no device specific minimum\n\tR/W multiple sector transfer: Max = 128\tCurrent = 128\n\tDMA: mdma0 mdma1 mdma2 udma0 udma1 udma2 udma3 udma4 udma5 *udma6 \n\t     Cycle time: min=120ns recommended=120ns\n\tPIO: pio0 pio1 pio2 pio3 pio4 \n\t     Cycle time: no flow control=120ns  IORDY flow control=120ns\nCommands/features:\n\tEnabled\tSupported:\n\t   *\tPower Management feature set\n\t   *\tWrite cache\n\t   *\tLook-ahead\n\t   *\t48-bit Address feature set\n\t   *\tMandatory FLUSH_CACHE\n\t   *\tFLUSH_CACHE_EXT\n\t   *\tGen2 signaling speed (3.0Gb/s)\n\t   *\tNative Command Queueing (NCQ)\nChecksum: correct",
+            "secure_erase_supported": false,
+            "supported": false
+          },
+          "type": "ATA/SATA",
+          "wwn": "t10.ata     vbox harddisk                           vb374dbc03-ecfa2108"
+        }
+      },
+      "policy": "default",
+      "policy_name": "HDD_OVERWRITE",
+      "rationale": "Default HDD policy selects host-level overwrite unless ATA erase is explicitly enabled and available.",
+      "reason": "Default HDD policy selects host-level overwrite unless ATA erase is explicitly enabled and available.",
+      "requires_authorization": "<redacted>",
+      "selected_pathway": "HDD_OVERWRITE",
+      "supported_methods": [
+        "HDD_OVERWRITE"
+      ],
+      "unsupported": false,
+      "warnings": []
+    },
+    "started_at": "2026-08-25T15:14:45.468545Z",
+    "verification": {
+      "bytes_checked": 32768,
+      "device": "/dev/sda",
+      "errors": [],
+      "evidence": {
+        "bytes_checked": 32768,
+        "samples_checked": 8,
+        "samples_failed": 0,
+        "samples_passed": 8,
+        "source": "hdd_zero_sampling",
+        "status": "verified"
+      },
+      "limitations": [
+        "Verification is evidence-based sampling only and not a full physical-sector guarantee."
+      ],
+      "message": "HDD verification observed zero-filled samples; this is evidence, not absolute proof of full physical sanitization.",
+      "metadata": {
+        "bytes_checked": 32768,
+        "samples_checked": 8,
+        "samples_failed": 0,
+        "samples_passed": 8,
+        "source": "hdd_zero_sampling",
+        "status": "verified"
+      },
+      "pathway": "HDD_OVERWRITE",
+      "samples_checked": 8,
+      "samples_failed": 0,
+      "samples_passed": 8,
+      "status": "VERIFIED",
+      "verified": true,
+      "warnings": [
+        "Sampled read-only verification confirms the observed zero pattern, but does not prove every physical sector contains zeros."
+      ]
+    },
+    "warnings": [
+      "Sampled read-only verification confirms the observed zero pattern, but does not prove every physical sector contains zeros."
+    ]
+  },
+  "execution": {
+    "dry_run": false,
+    "errors": [],
+    "message": "HDD overwrite executed to completion.",
+    "metadata": {
+      "bytes_written": 26843545600,
+      "device_type": "HDD",
+      "duration_seconds": 353.314737693,
+      "end_time": 464.121442181,
+      "method": "HDD_OVERWRITE",
+      "start_time": 110.806688468,
+      "throughput": 75976297.43745568,
+      "total_bytes": 26843545600
+    },
+    "status": "RUNNING",
+    "target_device": "/dev/sda",
+    "warnings": []
+  },
+  "execution_environment": "boot_sanitize",
+  "final_status": "VERIFIED",
+  "local_job_id": "4edb1d85-ba87-4ee2-90d6-48808f00eaa6",
+  "result_path": "/var/lib/vyper-vm-evidence/hardware-validation/4edb1d85-ba87-4ee2-90d6-48808f00eaa6.result.json",
+  "selected_pathway": "HDD_OVERWRITE",
+  "target_identifiers_after": {
+    "device_type": "HDD",
+    "model": "vbox harddisk",
+    "nvme_eui64": null,
+    "nvme_nguid": null,
+    "serial_number": "vb374dbc03-ecfa2108",
+    "size_bytes": 26843545600,
+    "wwn": "t10.ata     vbox harddisk                           vb374dbc03-ecfa2108"
+  },
+  "target_identifiers_before": {
+    "device_type": "HDD",
+    "model": "vbox harddisk",
+    "nvme_eui64": null,
+    "nvme_nguid": null,
+    "serial_number": "vb374dbc03-ecfa2108",
+    "size_bytes": 26843545600,
+    "wwn": "t10.ata     vbox harddisk                           vb374dbc03-ecfa2108"
+  },
+  "upload_status": "RETAINED_OFFLINE",
+  "verification": {
+    "bytes_checked": 32768,
+    "details": "HDD verification observed zero-filled samples; this is evidence, not absolute proof of full physical sanitization.",
+    "device": "/dev/sda",
+    "errors": [],
+    "evidence": {
+      "bytes_checked": 32768,
+      "samples_checked": 8,
+      "samples_failed": 0,
+      "samples_passed": 8,
+      "source": "hdd_zero_sampling",
+      "status": "verified"
+    },
+    "limitations": [
+      "Verification is evidence-based sampling only and not a full physical-sector guarantee."
+    ],
+    "message": "HDD verification observed zero-filled samples; this is evidence, not absolute proof of full physical sanitization.",
+    "metadata": {
+      "bytes_checked": 32768,
+      "samples_checked": 8,
+      "samples_failed": 0,
+      "samples_passed": 8,
+      "source": "hdd_zero_sampling",
+      "status": "verified"
+    },
+    "pathway": "HDD_OVERWRITE",
+    "samples_checked": 8,
+    "samples_failed": 0,
+    "samples_passed": 8,
+    "status": "VERIFIED",
+    "verification_time": 0.018229850000011538,
+    "verified": true,
+    "warnings": [
+      "Sampled read-only verification confirms the observed zero pattern, but does not prove every physical sector contains zeros."
+    ]
+  },
+  "vm_validation": {
+    "blockers": [],
+    "destructive_eligible": true,
+    "destructive_gates": {
+      "allow_destructive_vm_test": true,
+      "boot_environment_independent": true,
+      "destructive_test_enabled": true,
+      "evidence_storage_separate": true,
+      "fresh_boot_confirmation_required": true,
+      "target_identity_matches": true,
+      "target_is_vm_system_disk": true,
+      "target_model_expected": true,
+      "target_serial_expected": true,
+      "target_size_expected": true,
+      "virtualbox_proven": true
+    },
+    "evidence_disk_identity": {
+      "device_type": "HDD",
+      "model": "vbox harddisk",
+      "nvme_eui64": null,
+      "nvme_nguid": null,
+      "serial_number": "vbfd688823-1e732331",
+      "size_bytes": 5368709120,
+      "wwn": "t10.ata     vbox harddisk                           vbfd688823-1e732331"
+    },
+    "evidence_disk_path": "/dev/sdb",
+    "evidence_mount": {
+      "device": "/dev/sdb",
+      "mounted": true,
+      "result_directory": "/var/lib/vyper-vm-evidence/hardware-validation",
+      "status": "SEPARATE_EVIDENCE_DISK"
+    },
+    "evidence_storage": "SEPARATE_DISK",
+    "host_virtualization": {
+      "product_name": "VirtualBox",
+      "system_vendor": "innotek GmbH",
+      "virtualbox_proven": true,
+      "virtualization_type": "oracle"
+    },
+    "target_identity": {
+      "device_type": "HDD",
+      "model": "vbox harddisk",
+      "nvme_eui64": null,
+      "nvme_nguid": null,
+      "serial_number": "vb374dbc03-ecfa2108",
+      "size_bytes": 26843545600,
+      "wwn": "t10.ata     vbox harddisk                           vb374dbc03-ecfa2108"
+    }
+  },
+  "warnings": []
+}

@@ -1,0 +1,9 @@
+{
+  "mechanism": "grub2-one-shot",
+  "current_default_entry": "Ubuntu",
+  "entry_name": "VYPER Boot Sanitize",
+  "next_entry": "VYPER Boot Sanitize",
+  "normal_default_unchanged": true,
+  "cancel_command": ["grub-editenv", "-", "unset", "next_entry"],
+  "mock_fixture": true
+}
