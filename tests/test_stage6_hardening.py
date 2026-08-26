@@ -207,8 +207,9 @@ def test_postgresql_transaction_rollback_when_ci_database_is_available():
 	username = f"rollback-{uuid4()}"
 	with engine.connect() as connection:
 		transaction = connection.begin()
-		connection.execute(text("INSERT INTO users (id, username, display_name, password_hash, role, password_changed_at) "
-			"VALUES (:id, :username, 'Rollback', 'not-a-real-password-hash', 'AUDITOR', :changed)"),
+		connection.execute(text("INSERT INTO users (id, username, display_name, password_hash, role, password_changed_at, "
+			"mfa_enabled, mfa_recovery_codes_json) VALUES (:id, :username, 'Rollback', "
+			"'not-a-real-password-hash', 'AUDITOR', :changed, false, CAST('[]' AS JSON))"),
 			{"id": str(uuid4()), "username": username, "changed": datetime.now(timezone.utc)})
 		transaction.rollback()
 		assert connection.execute(text("SELECT count(*) FROM users WHERE username = :username"), {"username": username}).scalar_one() == 0
