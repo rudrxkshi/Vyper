@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -141,6 +142,8 @@ class PrivilegedExecutorClient:
 			raise ExecutorProtocolError("Executor request exceeds the size limit.")
 		with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
 			client.settimeout(self.timeout); client.connect(self.socket_path); client.sendall(data)
+			if operation == "sanitize":
+				client.settimeout(None)
 			response = bytearray()
 			while b"\n" not in response:
 				chunk = client.recv(8192)
@@ -158,6 +161,21 @@ def peer_credentials(connection: socket.socket) -> tuple[int | None, int | None]
 		return None, None
 	pid, uid, gid = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
 	return uid, gid
+
+
+def _send_response(connection: socket.socket, response: dict[str, Any]) -> bool:
+	data = json.dumps(response, separators=(",", ":")).encode("utf-8") + b"\n"
+	try:
+		connection.sendall(data)
+	except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as exc:
+		logger.warning("Executor client disconnected before response delivery: %s", type(exc).__name__)
+		return False
+	except OSError as exc:
+		if exc.errno not in {errno.EPIPE, errno.ECONNRESET, errno.ECONNABORTED}:
+			raise
+		logger.warning("Executor client disconnected before response delivery: %s", type(exc).__name__)
+		return False
+	return True
 
 
 def serve(socket_path: str | Path, *, group_gid: int | None = None, dry_run_only: bool = False) -> None:
@@ -183,7 +201,7 @@ def serve(socket_path: str | Path, *, group_gid: int | None = None, dry_run_only
 					response = executor.dispatch(bytes(raw).split(b"\n", 1)[0], peer_uid=uid, peer_gid=gid)
 				except Exception as exc:
 					response = {"version": PROTOCOL_VERSION, "error": f"{type(exc).__name__}: {exc}"}
-				connection.sendall(json.dumps(response, separators=(",", ":")).encode("utf-8") + b"\n")
+				_send_response(connection, response)
 
 
 def main() -> None:
