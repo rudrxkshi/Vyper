@@ -384,6 +384,37 @@ def test_local_credential_permissions_and_offline_outbox_retry(tmp_path):
 	assert "never-log-this" not in json.dumps(restarted.due_outbox(now="9999-12-31T00:00:00Z"))
 
 
+def test_queued_job_result_payload_and_outbox_share_result_idempotency_key(tmp_path):
+	store = LocalJobStore(tmp_path / "local.db")
+	local_job_id = "local-result-1"
+	central_job_id = "central-result-1"
+	store.create_job(local_job_id=local_job_id, api_version="2", target="/dev/mock", dry_run=True,
+		authorization_metadata={"approved": False})
+	store.complete(local_job_id, {
+		"job_state": "INCONCLUSIVE", "final_status": "INCONCLUSIVE", "message": "Dry run complete.",
+		"progress": None, "profile": {}, "policy": {}, "execution": {}, "verification": {},
+		"evidence": {"final_status": "INCONCLUSIVE"}, "certificate": {"successful_sanitization_claim": False},
+		"error": None,
+	})
+	store.save_remote_request({
+		"central_job_id": central_job_id, "target_identity": "fixture-identity", "requested_target": "/dev/mock",
+		"dry_run": True, "authorization_policy": {"central_approved": False},
+		"expires_at": "2999-01-01T00:00:00Z", "idempotency_key": "remote-result-1", "nonce": "fixture-nonce",
+	})
+	assert store.map_remote_job(central_job_id, local_job_id, local_approved=False) is True
+	credential_store = AgentCredentialStore(tmp_path / "credential.json")
+	credential_store.save({"agent_id": "agent-1", "agent_token": "fixture-token", "agent_protocol_version": "1"})
+	sync = CentralSyncClient(
+		central_url="http://central.test", credential_store=credential_store, job_store=store,
+		discovery=DiscoveryStub([]), submit_local_job=lambda **kwargs: local_job_id,
+	)
+	assert sync.queue_job_updates() > 0
+	result = next(item for item in store.due_outbox(now="9999-12-31T00:00:00Z") if item["kind"] == "job_result")
+	expected = f"result:{central_job_id}"
+	assert result["idempotency_key"] == expected
+	assert result["payload"]["idempotency_key"] == expected
+
+
 def test_remote_destructive_request_requires_local_approval_and_revalidates_identity(tmp_path):
 	credential_store = AgentCredentialStore(tmp_path / "credential.json")
 	credential_store.save({"agent_id": "agent-1", "agent_token": "agent-token", "agent_protocol_version": "1"})

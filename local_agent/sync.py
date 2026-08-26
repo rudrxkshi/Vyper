@@ -239,7 +239,7 @@ class CentralSyncClient:
 			if job["final_status"] is not None:
 				result_payload = {
 					"agent_protocol_version": AGENT_PROTOCOL_VERSION,
-					"idempotency_key": f"result:{request['idempotency_key']}",
+					"idempotency_key": f"result:{request['central_job_id']}",
 					"local_job_id": local_job_id,
 					"job_state": job["job_state"], "final_status": job["final_status"],
 					"created_at": job["created_at"], "started_at": job["started_at"], "finished_at": job["finished_at"],

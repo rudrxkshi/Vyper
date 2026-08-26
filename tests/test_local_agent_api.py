@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from agent.agent import OrchestrationJobResult, _ObservableStateHistory
 from agent.common import JobState
 from agent.discovery import DiscoveredDevice
-from local_agent.jobs import result_payload
+from local_agent.jobs import LocalJobWorker, result_payload
 from local_agent.main import create_app
 from local_agent.storage import LocalJobStore
 
@@ -65,6 +65,24 @@ def test_terminal_payload_scopes_raw_execution_status(state, dry_run, terminal):
 	assert payload["execution"]["status_scope"] == "orchestration_terminal"
 	assert payload["evidence"]["execution"]["status"] == "RUNNING"
 	assert payload["execution_status_semantics"]["evidence.execution.status"] == "raw_pathway_historical"
+
+
+def test_terminal_payload_normalizes_cancelled_inconclusive_mismatch_without_losing_fields(tmp_path):
+	worker = LocalJobWorker(store=LocalJobStore(tmp_path / "terminal.db"), agent=object())
+	payload = {
+		"job_state": "CANCELLED", "final_status": "INCONCLUSIVE", "message": "Outcome is inconclusive.",
+		"profile": {"serial_number": "SER-TEST"}, "policy": {"selected_pathway": "HDD_OVERWRITE"},
+		"execution": {"status": "CANCELLED", "metadata": {"method": "HDD_OVERWRITE"}},
+		"verification": {"status": "INCONCLUSIVE", "verified": False},
+		"evidence": {"final_status": "INCONCLUSIVE", "integrity_hash": "fixture-hash"},
+		"certificate": {"successful_sanitization_claim": False}, "error": None,
+	}
+	original = json.loads(json.dumps(payload))
+	terminal = worker._terminal_payload(payload, dry_run=False)
+	assert terminal["job_state"] == terminal["final_status"] == "INCONCLUSIVE"
+	for field in ("message", "profile", "policy", "execution", "verification", "evidence", "certificate", "error"):
+		assert terminal[field] == original[field]
+	assert payload == original
 
 
 def _result(target, state="VERIFIED", *, method="HDD_OVERWRITE", dry_run=False, verified=True):
@@ -221,12 +239,12 @@ def test_lifecycle_events_are_durable_monotonic_and_dry_run_preserved(tmp_path):
 		executor.run_next()
 		job = client.get(f"/jobs/{accepted['local_job_id']}").json()
 		history = client.get("/jobs").json()
-	assert job["job_state"] == "CANCELLED"
+	assert job["job_state"] == "INCONCLUSIVE"
 	assert job["final_status"] == "INCONCLUSIVE"
 	assert [event["sequence"] for event in job["state_history"]] == list(range(1, len(job["state_history"]) + 1))
 	states = [event["state"] for event in job["state_history"]]
 	assert [state for index, state in enumerate(states) if index == 0 or state != states[index - 1]] == [
-		"PENDING", "PROFILING", "POLICY_SELECTED", "RUNNING", "VERIFYING", "CANCELLED"
+		"PENDING", "PROFILING", "POLICY_SELECTED", "RUNNING", "VERIFYING", "INCONCLUSIVE"
 	]
 	assert history[0]["local_job_id"] == accepted["local_job_id"]
 
