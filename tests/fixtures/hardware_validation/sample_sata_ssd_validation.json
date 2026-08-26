@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "validation_kind": "physical_sata_ssd",
+  "mock_fixture": true,
+  "verification_basis": [
+    "controller/native command evidence",
+    "VYPER verifier",
+    "independent logical/interface checks"
+  ],
+  "generated_at": "2026-08-25T13:00:00Z",
+  "vyper_version": "1.0.0-rc1",
+  "device_identity": {
+    "device_path": "/dev/sdy",
+    "model": "DISPOSABLE MOCK SATA SSD",
+    "serial_number": "MOCK-SATA-123456",
+    "wwn": "wwn-mock-sata-123456",
+    "stable_id": "wwn-mock-sata-123456",
+    "size_bytes": 128000000000,
+    "transport": "sata",
+    "interface": "ATA/SATA",
+    "rotational": false,
+    "device_type": "SATA SSD",
+    "is_system_device": false,
+    "mounted": false,
+    "partitions": []
+  },
+  "ata_capabilities": {
+    "hdparm_available": true,
+    "security_supported": true,
+    "security_enabled": false,
+    "security_frozen": false,
+    "secure_erase_supported": true,
+    "enhanced_secure_erase_supported": true,
+    "estimated_erase_time": ["2min for SECURITY ERASE UNIT"],
+    "ata_standard_or_version": "ATA Version is: ACS-4"
+  },
+  "test_data_manifest": {
+    "mock_fixture": true,
+    "filesystem": "ext4",
+    "filesystem_uuid": "00000000-0000-0000-0000-000000000000",
+    "files": [
+      {"path": "vyper-validation/secret.txt", "size_bytes": 672, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"path": "vyper-validation/sample.bin", "size_bytes": 1048576, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      {"path": "vyper-validation/random.bin", "size_bytes": 1048576, "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+    ]
+  },
+  "local_job_id": "mock-ata-local-job",
+  "selected_pathway": "ATA_ERASE",
+  "ata_execution_evidence": {
+    "ata_password_used": true,
+    "security_set_result_metadata": null,
+    "erase_prepare_result_metadata": null,
+    "erase_execution_result_metadata": null,
+    "erase_command_completed": true,
+    "security_frozen_before": false,
+    "duration_seconds": 120.0
+  },
+  "progress_summary": {
+    "mode": "indeterminate",
+    "measurement_count": 2,
+    "measurements": [
+      {"timestamp": "2026-08-25T13:00:05Z", "kind": "indeterminate"},
+      {"timestamp": "2026-08-25T13:02:00Z", "kind": "indeterminate"}
+    ],
+    "percentage_claimed": false
+  },
+  "verification_metadata": {
+    "status": "VERIFIED",
+    "verified": true,
+    "pathway": "ATA_ERASE",
+    "mock_fixture": true
+  },
+  "post_erase_security_state": {
+    "security_supported": true,
+    "security_enabled": false,
+    "security_frozen": false,
+    "secure_erase_supported": true
+  },
+  "evidence_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "certificate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "integrity": {
+    "evidence_valid": true,
+    "certificate_valid": true,
+    "evidence_certificate_bound": true
+  },
+  "identity_preserved": true,
+  "independent_post_checks": {
+    "filesystem_detected": false,
+    "filesystem_uuid": null,
+    "blkid_detected": false,
+    "file_signature": "/dev/sdy: data",
+    "controller_accessible": true,
+    "old_filesystem_normally_accessible": false,
+    "required_probes_succeeded": true,
+    "consistent_with_ata_secure_erase": true
+  },
+  "limitations": [
+    "MOCK FIXTURE: no physical SSD was tested.",
+    "Controller state and logical checks do not prove every NAND cell or spare block independently."
+  ],
+  "conclusion": "PASS",
+  "conclusion_statement": "The controller-native ATA erase completed, VYPER verified the device-reported post-state, and independent logical/interface checks found no contradictory old filesystem evidence."
+}

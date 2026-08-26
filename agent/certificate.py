@@ -274,6 +274,8 @@ def verify_certificate_integrity(certificate: SanitizationCertificate | dict[str
     else:
         return False
 
+    if str(payload.get("certificate_version", "")).split(".", 1)[0] != "1":
+        return False
     algorithm = str(payload.get("certificate_hash_algorithm", "sha256")).lower()
     expected = str(payload.get("certificate_hash", ""))
     if algorithm != "sha256" or not expected:

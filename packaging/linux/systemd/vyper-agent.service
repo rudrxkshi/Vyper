@@ -1,0 +1,29 @@
+[Unit]
+Description=VYPER unprivileged local agent and sync service
+After=local-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vyper-agent
+Group=vyper-executor
+WorkingDirectory=/opt/vyper
+Environment=VYPER_CONFIG_PATH=/etc/vyper/config.toml
+Environment=VYPER_AGENT_CREDENTIAL_PATH=/etc/vyper/agent-identity.json
+Environment=VYPER_LOCAL_AGENT_DATABASE_PATH=/var/lib/vyper/local-jobs.db
+Environment=VYPER_EXECUTOR_DRY_RUN=false
+Environment=VYPER_EXECUTOR_SOCKET=/run/vyper/executor.sock
+ExecStart=/opt/vyper/runtime/bin/vyper-local-agent
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/vyper /var/lib/vyper /var/log/vyper
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

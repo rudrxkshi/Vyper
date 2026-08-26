@@ -1,0 +1,43 @@
+{
+  "evidence_mount": {
+    "device": "/dev/sdd",
+    "filesystem_uuid": "bd3e0b84-fe74-4f04-ad62-cf80c21eeee5",
+    "mode": "ro,norecovery"
+  },
+  "filesystem_detected": false,
+  "inspection_vm": {
+    "evidence_device": "/dev/sdd",
+    "name": "vyper-stage11-inspector",
+    "target_device": "/dev/sdc",
+    "uuid": "3774cb52-a069-43b6-94f7-d72f450b5600"
+  },
+  "old_ubuntu_bootable": false,
+  "partition_table_detected": false,
+  "sample_method": "read-only cmp against /dev/zero; no harness dd",
+  "samples": [
+    {
+      "all_zero": true,
+      "length": 4096,
+      "offset": 0,
+      "region": "beginning"
+    },
+    {
+      "all_zero": true,
+      "length": 4096,
+      "offset": 13421772800,
+      "region": "middle"
+    },
+    {
+      "all_zero": true,
+      "length": 4096,
+      "offset": 26843541504,
+      "region": "end"
+    }
+  ],
+  "sentinel_accessible": false,
+  "target_identity_match": true,
+  "target_model": "VBOX HARDDISK",
+  "target_mounted": false,
+  "target_serial": "VB374dbc03-ecfa2108",
+  "target_size_bytes": 26843545600
+}

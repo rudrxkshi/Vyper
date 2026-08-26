@@ -1,0 +1,1 @@
+{"fixture":true,"namespace":"/dev/nvme9n1","controller_target":"/dev/nvme9","namespace_count":1,"method":"CRYPTO_ERASE","sanitize_log":{"sstat":"SUCCESS"},"final_status":"VERIFIED"}

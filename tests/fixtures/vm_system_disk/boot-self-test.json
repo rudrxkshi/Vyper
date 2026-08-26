@@ -1,0 +1,25 @@
+{
+  "boot_self_test": "PASS",
+  "timestamp": "2026-08-25T00:01:00Z",
+  "kernel_version": "6.8.0-example-generic",
+  "boot_environment_version": "1.0.0-rc1",
+  "checks": [
+    {"name": "linux_kernel", "status": "PASS", "detail": "6.8.0-example-generic"},
+    {"name": "boot_environment", "status": "PASS", "detail": "active job and boot_sanitize kernel mode"},
+    {"name": "python_runtime", "status": "PASS", "detail": "/usr/bin/python3 (3.12.3)"},
+    {"name": "lsblk", "status": "PASS", "detail": "/usr/bin/lsblk"},
+    {"name": "hdparm", "status": "PASS", "detail": "/usr/sbin/hdparm"},
+    {"name": "nvme", "status": "PASS", "detail": "/usr/sbin/nvme"},
+    {"name": "network_tool", "status": "PASS", "detail": "/usr/sbin/ip"},
+    {"name": "shutdown_tool", "status": "PASS", "detail": "/usr/bin/systemctl"},
+    {"name": "import:agent.agent", "status": "PASS", "detail": "available"},
+    {"name": "import:agent.evidence", "status": "PASS", "detail": "available"},
+    {"name": "import:agent.certificate", "status": "PASS", "detail": "available"},
+    {"name": "import:local_agent.boot_sanitize", "status": "PASS", "detail": "available"},
+    {"name": "boot_manifest_parser", "status": "PASS", "detail": "/etc/vyper/active-boot-job"},
+    {"name": "hmac_key", "status": "PASS", "detail": "/var/lib/vyper/boot-jobs/job-mac.key"},
+    {"name": "result_location", "status": "PASS", "detail": "/var/lib/vyper/boot-results"}
+  ],
+  "mock_fixture": true,
+  "limitation": "Illustrative output only; capture actual output inside the Ubuntu-built temporary boot environment."
+}

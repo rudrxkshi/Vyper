@@ -1,0 +1,27 @@
+{
+  "illustrative_only": true,
+  "payload": {
+    "schema_version": "1",
+    "boot_job_id": "sample-boot-job",
+    "central_job_id": "sample-central-job",
+    "requested_asset_identity": "illustrative-identity-digest",
+    "expected_device_identifiers": {
+      "wwn": "sample-wwn",
+      "serial_number": "DEMO-0001",
+      "model": "Disposable Virtual Disk",
+      "size_bytes": 5368709120,
+      "device_type": "HDD"
+    },
+    "requested_method": "POLICY",
+    "dry_run": true,
+    "execution_mode": "boot_sanitize",
+    "local_confirmation_state": "REQUIRED_IN_BOOT_ENVIRONMENT",
+    "boot_image_version": "1.0.0-rc1",
+    "job_nonce": "illustrative-random-nonce"
+  },
+  "integrity": {
+    "algorithm": "HMAC-SHA256",
+    "key_id": "local-boot-job-v1",
+    "mac": "illustrative-not-a-valid-mac"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "agent": {
+    "version": "vyper-agent/0.8.0-rc1"
+  },
+  "certificate_hash": "5dfd721c82cc5db8434564a76df1ca221780068f5ede199644a41ca05e77fb37",
+  "certificate_hash_algorithm": "sha256",
+  "certificate_id": "93bbe731-6154-4b4b-bb1f-fe775cbbbf2f",
+  "certificate_version": "1.0.0",
+  "device": {
+    "capacity_bytes": 26843545600,
+    "device_path": "/dev/sda",
+    "device_type": "HDD",
+    "interface": "ATA/SATA",
+    "model": "VBOX HARDDISK",
+    "serial": "VB374dbc03-ecfa2108",
+    "transport": null
+  },
+  "evidence_integrity": {
+    "algorithm": "sha256",
+    "hash": "185e79cabb29e83f04c6bff48750f33314c5c4b6d8857977a08d80741591605e"
+  },
+  "execution": {
+    "completed_at": "2026-08-25T15:20:38.816349Z",
+    "duration_seconds": 353.314737693,
+    "started_at": "2026-08-25T15:14:45.468545Z",
+    "status": "RUNNING"
+  },
+  "final_status": "VERIFIED",
+  "issued_at": "2026-08-25T15:20:38.817391Z",
+  "job_id": "37c98d32-6e32-49cc-8277-5ab8c8bb8298",
+  "outcome_kind": "sanitization_certificate",
+  "sanitization": {
+    "executed_pathway": "HDD_OVERWRITE",
+    "policy_reason": "Default HDD policy selects host-level overwrite unless ATA erase is explicitly enabled and available.",
+    "sanitization_method": "HDD_OVERWRITE",
+    "selected_pathway": "HDD_OVERWRITE"
+  },
+  "successful_sanitization_claim": true,
+  "verification": {
+    "errors": [],
+    "evidence": {
+      "bytes_checked": 32768,
+      "samples_checked": 8,
+      "samples_failed": 0,
+      "samples_passed": 8,
+      "source": "hdd_zero_sampling",
+      "status": "verified"
+    },
+    "limitations": [
+      "Verification is evidence-based sampling only and not a full physical-sector guarantee."
+    ],
+    "status": "VERIFIED",
+    "verified": true,
+    "warnings": [
+      "Sampled read-only verification confirms the observed zero pattern, but does not prove every physical sector contains zeros."
+    ]
+  }
+}

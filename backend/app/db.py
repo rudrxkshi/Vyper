@@ -14,17 +14,20 @@ class Base(DeclarativeBase):
 
 
 def default_database_url() -> str:
+	url_file = os.getenv("VYPER_DATABASE_URL_FILE")
+	if url_file:
+		try:
+			value = Path(url_file).read_text(encoding="utf-8").strip()
+		except OSError as exc:
+			raise RuntimeError("VYPER_DATABASE_URL_FILE could not be read.") from exc
+		if not value:
+			raise RuntimeError("VYPER_DATABASE_URL_FILE is empty.")
+		return value
 	env_url = os.getenv("VYPER_DATABASE_URL")
 	if env_url:
 		return env_url
-
-	postgres_host = os.getenv("VYPER_POSTGRES_HOST") or os.getenv("POSTGRES_HOST")
-	postgres_db = os.getenv("VYPER_POSTGRES_DB") or os.getenv("POSTGRES_DB")
-	postgres_user = os.getenv("VYPER_POSTGRES_USER") or os.getenv("POSTGRES_USER")
-	postgres_password = os.getenv("VYPER_POSTGRES_PASSWORD") or os.getenv("POSTGRES_PASSWORD")
-	postgres_port = os.getenv("VYPER_POSTGRES_PORT") or os.getenv("POSTGRES_PORT", "5432")
-	if postgres_host and postgres_db and postgres_user and postgres_password:
-		return f"postgresql+psycopg2://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+	if os.getenv("VYPER_ENV", "development").strip().lower() == "production":
+		raise RuntimeError("VYPER_DATABASE_URL is required in production and must point to PostgreSQL.")
 
 	database_path = Path(__file__).resolve().parents[2] / "backend" / "vyper.db"
 	database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,6 +36,8 @@ def default_database_url() -> str:
 
 def create_engine_and_session_factory(database_url: str | None = None):
 	resolved_url = database_url or default_database_url()
+	if os.getenv("VYPER_ENV", "development").strip().lower() == "production" and not resolved_url.startswith("postgresql"):
+		raise RuntimeError("Production central deployments require a PostgreSQL VYPER_DATABASE_URL.")
 	connect_args = {"check_same_thread": False} if resolved_url.startswith("sqlite") else {}
 	engine = create_engine(resolved_url, connect_args=connect_args, future=True)
 	session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)

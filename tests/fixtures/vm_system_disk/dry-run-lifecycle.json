@@ -1,0 +1,16 @@
+{
+  "boot_job_id": "mock-boot-job-9d",
+  "events": [
+    {"state": "PREPARING_BOOT", "timestamp": "2026-08-25T00:00:00Z"},
+    {"state": "AWAITING_REBOOT", "timestamp": "2026-08-25T00:00:01Z"},
+    {"state": "BOOT_ENVIRONMENT_STARTED", "timestamp": "2026-08-25T00:01:00Z"},
+    {"state": "VALIDATING_TARGET", "timestamp": "2026-08-25T00:01:01Z"},
+    {"state": "WAITING_LOCAL_APPROVAL", "timestamp": "2026-08-25T00:01:02Z"},
+    {"state": "RUNNING", "timestamp": "2026-08-25T00:01:03Z"},
+    {"state": "VERIFYING", "timestamp": "2026-08-25T00:01:04Z"},
+    {"state": "INCONCLUSIVE", "timestamp": "2026-08-25T00:01:05Z"}
+  ],
+  "workflow_validation": "PASS",
+  "sanitization_validation": "NOT_EXECUTED",
+  "mock_fixture": true
+}

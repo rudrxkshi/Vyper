@@ -1,0 +1,13 @@
+# Central production deployment
+
+Run `docker compose -f docker-compose.production.yml up --build`. Store the PostgreSQL password and complete psycopg URL in mode-0600 `secrets/postgres_password` and `secrets/central_database_url` files, or use the deployment platform's secret store. Set a unique, randomly generated `VYPER_MFA_ENCRYPTION_KEY` of at least 32 characters in the deployment secret store; losing it makes enrolled MFA secrets unusable. Set `VYPER_DOMAIN`; Caddy obtains/renews TLS, redirects HTTP, supplies HSTS, and proxies `/api` to FastAPI. Production cookies are Secure/HttpOnly/SameSite=Lax and unsafe cookie-authenticated requests require the matching CSRF header. Keep `VYPER_CORS_ORIGINS` empty for same-origin deployment, or set only exact HTTPS origins.
+
+Production requires one `VYPER_DATABASE_URL` using `postgresql+psycopg://`; there is no SQLite fallback. The one-shot migration service runs `alembic upgrade head` before the non-root backend starts. Startup never calls `create_all` in production. Set `VYPER_METRICS_MODE=single-worker`; the built-in metrics registry is process-local and must not be deployed with multiple API workers. Bootstrap the first operator after migration with `python -m backend.app.admin_cli admin --role ADMIN` in a protected administrative shell.
+
+Trust forwarded headers only from the private proxy network. Do not publish backend port 8000 or PostgreSQL. The privileged local storage agent is never part of these central containers.
+
+## Local privilege boundary
+
+The browser-facing console and outbound-sync service run as unprivileged accounts. The local agent submits a versioned, typed allowlisted request over `/run/vyper/executor.sock`; it cannot submit arbitrary commands or argument vectors. `vyper-executor.service` is the root-owned storage boundary, validates the target and authorization again, serializes operations per target, and invokes the existing sanitization engine. The socket is mode 0660 for the `vyper-executor` group. Keep the local API on loopback and require its API credential. Treat membership in `vyper-executor` as privileged access, and audit the helper's request ID, peer credentials, target, selected pathway, controller resolution, and redacted command provenance.
+
+Release verification is checksum-only until an Ed25519 signature is attached and its public-key fingerprint is present in `/opt/vyper/trust/trusted-release-keys.json`. Missing, unknown, or revoked keys are rejected; signing private keys must never be shipped in an image or backup. Check `vyper system-disk secure-boot-status` before boot-environment deployment. `REQUIRES_KEY_ENROLLMENT` is an operator action and must not be bypassed automatically.

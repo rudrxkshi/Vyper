@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,9 @@ router = APIRouter(tags=["assets"], dependencies=[Depends(require_api_key)])
 
 
 @router.get("", response_model=list[AssetRead])
-def list_assets(db: Session = Depends(get_db)):
+def list_assets(response: Response, db: Session = Depends(get_db)):
+	"""Return persisted asset history; this is not live local device discovery."""
+	response.headers["X-VYPER-Inventory-Source"] = "persisted-assets"
 	assets = db.execute(select(AssetRecord).order_by(AssetRecord.updated_at.desc().nullslast(), AssetRecord.created_at.desc())).scalars().all()
 	return [asset_to_dict(asset) for asset in assets]
 

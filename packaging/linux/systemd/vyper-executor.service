@@ -1,0 +1,32 @@
+[Unit]
+Description=VYPER narrow privileged storage executor
+After=local-fs.target
+Before=vyper-agent.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/vyper
+Environment=VYPER_EXECUTOR_SOCKET=/run/vyper/executor.sock
+Environment=VYPER_EXECUTOR_GROUP=vyper-executor
+Environment=VYPER_EXECUTOR_DRY_RUN=false
+RuntimeDirectory=vyper
+RuntimeDirectoryMode=0750
+ExecStart=/opt/vyper/runtime/bin/vyper-privileged-executor
+Restart=on-failure
+UMask=0007
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+ReadWritePaths=/run/vyper /var/lib/vyper /var/log/vyper
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "validation_kind": "physical_nvme",
+  "mock_fixture": true,
+  "generated_at": "2026-08-25T14:00:00Z",
+  "vyper_version": "1.0.0-rc1",
+  "requested_namespace": "/dev/nvme9n1",
+  "resolved_controller": "/dev/nvme9",
+  "sanitize_target": "/dev/nvme9",
+  "scope_validation": {
+    "scope_proven": true,
+    "mock_fixture": true,
+    "sanitize_scope": "controller",
+    "controller_namespaces": ["/dev/nvme9n1"],
+    "execution_eligible": true
+  },
+  "device_identity": {
+    "namespace_path": "/dev/nvme9n1",
+    "controller_path": "/dev/nvme9",
+    "model": "DISPOSABLE MOCK NVME",
+    "serial_number": "MOCK-NVME-123456",
+    "firmware_revision": "1.0",
+    "size_bytes": 128000000000,
+    "namespace_id": 1,
+    "nguid": "00112233445566778899aabbccddeeff",
+    "eui64": "0011223344556677",
+    "namespace_uuid": "11111111-2222-3333-4444-555555555555",
+    "pci_controller_identity": "/sys/devices/mock/nvme9",
+    "transport": "pcie",
+    "mounted": false,
+    "is_system_device": false,
+    "stable_id": "00112233445566778899aabbccddeeff"
+  },
+  "asset_namespace_identity": {
+    "namespace_path": "/dev/nvme9n1",
+    "namespace_id": 1,
+    "size_bytes": 128000000000,
+    "nguid": "00112233445566778899aabbccddeeff",
+    "eui64": "0011223344556677",
+    "namespace_uuid": "11111111-2222-3333-4444-555555555555",
+    "stable_id": "00112233445566778899aabbccddeeff"
+  },
+  "controller_identity": {
+    "path": "/dev/nvme9",
+    "serial_number": "MOCK-NVME-123456",
+    "model": "DISPOSABLE MOCK NVME",
+    "firmware_revision": "1.0",
+    "pci_controller_identity": "/sys/devices/mock/nvme9"
+  },
+  "nvme_capabilities": {
+    "sanicap_raw": 7,
+    "crypto_erase_supported": true,
+    "block_erase_supported": true,
+    "overwrite_supported": true,
+    "no_deallocate_modifies_media_after_sanitize": 0,
+    "controller_model": "DISPOSABLE MOCK NVME",
+    "controller_serial": "MOCK-NVME-123456",
+    "firmware_revision": "1.0"
+  },
+  "policy_selected_method": "CRYPTO_ERASE",
+  "expected_sanact": "4",
+  "actual_effective_method": "CRYPTO_ERASE",
+  "actual_sanact": "4",
+  "test_data_manifest": {
+    "mock_fixture": true,
+    "filesystem": "ext4",
+    "files": [
+      {"path": "vyper-validation/secret.txt", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"path": "vyper-validation/sample.bin", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      {"path": "vyper-validation/random.bin", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+    ]
+  },
+  "command_submission_result": {
+    "submitted": true,
+    "completion_status": "COMPLETED",
+    "duration_seconds": 10.0,
+    "warnings": [],
+    "errors": []
+  },
+  "sanitize_status_timeline": [
+    {"timestamp": "2026-08-25T14:00:05Z", "raw_json": "{\"sstat\":2}", "sstat_raw": 2, "status_bits": 2, "normalized_status": "IN_PROGRESS", "global_data_erased": false},
+    {"timestamp": "2026-08-25T14:00:10Z", "raw_json": "{\"sstat\":1}", "sstat_raw": 1, "status_bits": 1, "normalized_status": "COMPLETED", "global_data_erased": false}
+  ],
+  "controller_completion_result": {
+    "sstat": 1,
+    "status_code": 1,
+    "status": "COMPLETED",
+    "global_data_erased": false
+  },
+  "progress_summary": {
+    "mode": "indeterminate",
+    "percentage_claimed": false,
+    "display": "RUNNING - controller sanitize operation in progress"
+  },
+  "verification_result": {"status": "VERIFIED", "verified": true, "pathway": "CRYPTO_ERASE"},
+  "evidence_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "certificate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "integrity": {"evidence_valid": true, "certificate_valid": true, "evidence_certificate_bound": true},
+  "identity_preserved": true,
+  "independent_post_checks": {
+    "controller_accessible": true,
+    "namespace_accessible": true,
+    "critical_probes_succeeded": true,
+    "contradictory_interface_evidence": false,
+    "logical_post_checks_are_secondary": true
+  },
+  "verification_basis": [
+    "SANICAP support for CRYPTO_ERASE",
+    "policy-selected CRYPTO_ERASE",
+    "SANACT 4",
+    "structured sanitize-log SSTAT COMPLETED",
+    "VYPER verifier VERIFIED",
+    "valid bound evidence and certificate"
+  ],
+  "limitations": [
+    "MOCK FIXTURE: no physical NVMe device was tested.",
+    "Controller completion depends on firmware correctness; logical reads do not prove every NAND location or encryption-key state."
+  ],
+  "conclusion": "PASS",
+  "conclusion_statement": "Validation basis: controller-reported completion of NVMe cryptographic sanitize."
+}

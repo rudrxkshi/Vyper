@@ -1,0 +1,1 @@
+{"fixture":true,"schema_version":"1","boot_job_id":"demo-boot-job","execution_mode":"boot_sanitize","dry_run":true,"target_identity":{"serial_number":"DEMO-SYSTEM-001"},"lifecycle":["PREPARING_BOOT","AWAITING_REBOOT","BOOT_ENVIRONMENT_STARTED","VALIDATING_TARGET","WAITING_LOCAL_APPROVAL","RUNNING","VERIFYING","INCONCLUSIVE"]}

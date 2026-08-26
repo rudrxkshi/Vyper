@@ -1,0 +1,1 @@
+{"fixture":true,"validation_kind":"system_disk_virtualbox","workflow_validation":"PASS","virtual_disk_sanitization_validation":"PASS","final_status":"VERIFIED","sentinel_inaccessible":true,"old_ubuntu_bootable":false,"scope":"VirtualBox HDD-like VDI only","physical_claim":false}

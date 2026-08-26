@@ -1,0 +1,87 @@
+name: VYPER CI
+on:
+  pull_request:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: vyper_ci
+          POSTGRES_USER: vyper_ci
+          POSTGRES_PASSWORD: ci-only-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vyper_ci -d vyper_ci"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip}
+      - run: pip install -r requirements.lock -r requirements-central.lock "pytest==9.1.1" "pip-audit==2.9.0"
+      - run: alembic upgrade head
+        env: {VYPER_DATABASE_URL: "sqlite:///stage6-migration.db"}
+      - run: alembic upgrade head
+        env: {VYPER_DATABASE_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"}
+      - run: pytest -p no:cacheprovider
+        env: {VYPER_TEST_POSTGRES_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"}
+      - run: pytest tests/test_stage7_boot_sanitize.py tests/test_stage8_release_candidate.py -p no:cacheprovider
+      - run: pip-audit -r requirements.lock -r requirements-central.lock
+      - run: python scripts/postgres-validation.py
+        env: {VYPER_TEST_POSTGRES_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"}
+      - run: PGPASSWORD=ci-only-password psql -h 127.0.0.1 -U vyper_ci -d postgres -c 'CREATE DATABASE vyper_restore'
+      - run: python scripts/postgres-backup-restore.py --execute
+        env:
+          VYPER_TEST_POSTGRES_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_ci"
+          VYPER_TEST_POSTGRES_RESTORE_URL: "postgresql+psycopg://vyper_ci:ci-only-password@127.0.0.1:5432/vyper_restore"
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: frontend/user-dashboard}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm, cache-dependency-path: frontend/user-dashboard/package-lock.json}
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm audit --audit-level=high
+      - run: npm run build
+  package:
+    runs-on: ubuntu-latest
+    needs: [python, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - uses: actions/setup-node@v4
+        with: {node-version: 22}
+      - run: pip install -r requirements.lock -r requirements-central.lock build pytest
+      - run: npm ci
+        working-directory: frontend/user-dashboard
+      - run: python packaging/build_release.py
+      - run: python packaging/generate_sbom.py
+      - run: python packaging/boot/build_boot_image.py --fixture --output-dir release/boot
+      - run: python packaging/validate_release.py
+      - run: python -m pip_audit -r requirements.lock -r requirements-central.lock
+      - run: npm audit --audit-level=high
+        working-directory: frontend/user-dashboard
+      - run: python -m pytest tests/test_stage13_security.py tests/test_stage14_release_freeze.py -p no:cacheprovider
+      - run: pytest tests/test_packaging.py tests/test_stage7_boot_sanitize.py tests/test_stage8_release_candidate.py -p no:cacheprovider
+      - run: git diff --check
+
+  containers:
+    runs-on: ubuntu-latest
+    needs: [python, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f docker-compose.production.yml config --quiet
+      - run: docker build -f Dockerfile.central -t vyper-central:ci .
+      - run: docker build -f frontend/user-dashboard/Dockerfile -t vyper-frontend:ci frontend/user-dashboard
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/')
+        with: {name: vyper-linux-release, path: release/}

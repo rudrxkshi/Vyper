@@ -1,25 +1,46 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   LayoutGrid, HardDrive, ListChecks, FileCheck2, ScrollText, Settings as SettingsIcon,
-  ChevronDown, ShieldCheck, Lock, Search, X, Check, TriangleAlert, CircleDot,
+  ChevronDown, ShieldCheck, Lock, Search, X, Check, TriangleAlert, CircleDot, Users,
+  Download as DownloadIcon,
 } from "lucide-react";
+import {
+  checkBackendConnection,
+  clearApiSettings,
+  createApiClient,
+  formatApiError,
+  getDefaultApiBaseUrl,
+  getDashboardMode,
+  loadApiSettings,
+  loadLocalJobId,
+  saveApiSettings,
+  saveLocalJobId,
+} from "../lib/api.mjs";
 
+import {
+  JOB_STATE_META,
+  auditLogView,
+  certificateView,
+  filterAssets,
+  filterAuditLogs,
+  formatBytes,
+  getDeviceProtection,
+  getFinalStatusMeta,
+  getJobStateMeta,
+  getProgressPresentation,
+  mountedPartitionsText,
+  normalizeDiscoveredDevices,
+  normalizeCentralJob,
+  normalizeLocalJob,
+  normalizeRemoteAgent,
+  shouldPollLocalJob,
+} from "../lib/presentation.mjs";
+
+const PRODUCT_VERSION = "1.0.0-rc1";
 const STAGES = ["Profiling", "Policy", "Execution", "Verification", "Evidence", "Certificate"];
-
-const STATE_META = {
-  PENDING: { stage: -1, tone: "pend", label: "Pending" },
-  PROFILING: { stage: 0, tone: "acc", label: "Profiling" },
-  POLICY_SELECTED: { stage: 1, tone: "acc", label: "Policy selected" },
-  AWAITING_AUTHORIZATION: { stage: 1, tone: "warn", label: "Awaiting authorization" },
-  RUNNING: { stage: 2, tone: "acc", label: "Running" },
-  VERIFYING: { stage: 3, tone: "acc", label: "Verifying" },
-  VERIFIED: { stage: 5, tone: "ok", label: "Verified" },
-  FAILED: { stage: 2, tone: "bad", label: "Failed" },
-  INCONCLUSIVE: { stage: 3, tone: "warn", label: "Inconclusive" },
-  UNSUPPORTED: { stage: 0, tone: "bad", label: "Unsupported" },
-  CANCELLED: { stage: -1, tone: "pend", label: "Cancelled" },
-};
+const TERMINAL_JOB_STATES = new Set(["VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"]);
 
 function Badge({ tone = "pend", children, stamp }) {
   return (
@@ -56,14 +77,14 @@ function JsonPanel({ title, json, defaultOpen }) {
   );
 }
 function Pipeline({ jobState }) {
-  const meta = STATE_META[jobState] || STATE_META.PENDING;
+  const meta = getJobStateMeta(jobState);
   const failedAt = jobState === "FAILED" || jobState === "UNSUPPORTED" ? meta.stage : -1;
   return (
     <div className="nb-pipeline">
       {STAGES.map((label, i) => {
         let cls = "pend";
         if (failedAt === i) cls = "bad";
-        else if (i < meta.stage || jobState === "VERIFIED") cls = "done";
+        else if (i < meta.stage || meta.successful) cls = "done";
         else if (i === meta.stage) cls = "current";
         return (
           <div className={"nb-pstep nb-pstep-" + cls} key={label}>
@@ -80,18 +101,35 @@ function Pipeline({ jobState }) {
 }
 
 export default function VyperDashboard() {
-  const [screen, setScreen] = useState("dashboard");
+  const localMode = getDashboardMode() === "local";
+  const [screen, setScreen] = useState(() =>
+    localMode && typeof window !== "undefined" && loadLocalJobId(window.localStorage)
+      ? "jobdetail"
+      : "dashboard",
+  );
   const [assets, setAssets] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [certs, setCerts] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
-  const [jobDetail, setJobDetail] = useState(null);
+  const [remoteAgents, setRemoteAgents] = useState([]);
+  const [remoteAssets, setRemoteAssets] = useState([]);
+  const [centralJobs, setCentralJobs] = useState([]);
+  const [remoteRequests, setRemoteRequests] = useState([]);
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [remoteApprovalPassword, setRemoteApprovalPassword] = useState("");
+  const [remoteApprovalError, setRemoteApprovalError] = useState("");
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [remoteJobForm, setRemoteJobForm] = useState({ assetId: "", dryRun: true, authorized: false, executionMode: "normal_local" });
+  const [remoteJobError, setRemoteJobError] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [backendConnected, setBackendConnected] = useState(false);
+  const [dataError, setDataError] = useState("");
 
   const [selectedAssetId, setSelectedAssetId] = useState(null);
-  const [selectedJobId, setSelectedJobId] = useState(null);
+  const [selectedJobId, setSelectedJobId] = useState(() =>
+    typeof window === "undefined" ? null : loadLocalJobId(window.localStorage),
+  );
   const [selectedCertId, setSelectedCertId] = useState(null);
 
   const [assetType, setAssetType] = useState("All");
@@ -106,122 +144,174 @@ export default function VyperDashboard() {
   const [form, setForm] = useState({ target: "", ataPassword: "", dryRun: true, authorized: false });
   const [formError, setFormError] = useState("");
 
-  const [apiUrl, setApiUrl] = useState("http://127.0.0.1:8000");
-  const [apiKey, setApiKey] = useState("");
+  const [apiUrl, setApiUrl] = useState(() =>
+    loadApiSettings(typeof window === "undefined" ? null : window.localStorage).apiUrl,
+  );
+  const [apiKey, setApiKey] = useState(() =>
+    loadApiSettings(typeof window === "undefined" ? null : window.localStorage).apiKey,
+  );
   const [savedMsg, setSavedMsg] = useState("");
-  useEffect(() => {
-    async function loadBackendData() {
+  const [operatorUser, setOperatorUser] = useState(localMode ? { role: "LOCAL" } : undefined);
+  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
+  const [loginError, setLoginError] = useState("");
+
+  const apiClient = useMemo(
+    () => createApiClient({
+      baseUrl: apiUrl,
+      apiKey,
+      expectedService: localMode ? "local-agent" : "central",
+    }),
+    [apiUrl, apiKey, localMode],
+  );
+
+  const refreshDashboardData = useCallback(async ({ showLoading = false } = {}) => {
+    if (showLoading) setLoading(true);
+    setDataError("");
+
+    const connected = await checkBackendConnection(apiClient);
+    setBackendConnected(connected);
+    if (!connected) {
+      setDataError("Unable to reach the VYPER API health endpoint.");
+      if (showLoading) setLoading(false);
+      return false;
+    }
+
+    if (!localMode) {
       try {
-        setLoading(true);
-
-        const headers = {};
-
-        if (apiKey) {
-          headers["X-VYPER-API-Key"] = apiKey;
-        }
-
-        const safeFetch = async (url) => {
-          try {
-            const res = await fetch(url, { headers });
-
-            if (!res.ok) {
-              console.log(`Backend endpoint unavailable: ${url}`);
-              return null;
-            }
-
-            return await res.json();
-          } catch (error) {
-            console.log(`Backend endpoint unavailable: ${url}`);
-            return null;
-          }
-        };
-
-        const [assetsData, jobsData, certsData, auditData] =
-          await Promise.all([
-            safeFetch(`${apiUrl}/assets`),
-            safeFetch(`${apiUrl}/jobs`),
-            safeFetch(`${apiUrl}/certificates`),
-            safeFetch(`${apiUrl}/audit-logs`),
-          ]);
-
-        // Only replace hardcoded data when backend actually returned data.
-        if (assetsData !== null) {
-          setAssets(assetsData);
-          setSelectedAssetId(assetsData[0]?.id || null);
-        }
-
-        if (jobsData !== null) {
-          setJobs(jobsData);
-          setSelectedJobId(jobsData[0]?.id || null);
-        }
-
-        if (certsData !== null) {
-          setCerts(certsData);
-          setSelectedCertId(certsData[0]?.id || null);
-        }
-
-        if (auditData !== null) {
-          setAuditLogs(auditData);
-        }
-
-        setBackendConnected(true);
-
+        setOperatorUser(await apiClient.currentUser());
       } catch (error) {
-        console.error("Backend connection failed:", error);
-        setBackendConnected(false);
-      } finally {
-        setLoading(false);
+        if (error?.status === 401) {
+          setOperatorUser(null);
+          setDataError("");
+          if (showLoading) setLoading(false);
+          return false;
+        }
+        setDataError(formatApiError(error));
+        if (showLoading) setLoading(false);
+        return false;
       }
     }
 
-    loadBackendData();
-  }, [apiUrl, apiKey]);
-
-  async function loadJobDetail(jobId) {
     try {
-      const headers = {};
-
-      if (apiKey) {
-        headers["X-VYPER-API-Key"] = apiKey;
+      let assetsData;
+      if (localMode) {
+        const [devicesData, localJobsData, remoteRequestsData, syncStatusData] = await Promise.all([
+          apiClient.listDevices(),
+          apiClient.listJobs(),
+          apiClient.listRemoteJobs(),
+          apiClient.getSyncStatus(),
+        ]);
+        assetsData = normalizeDiscoveredDevices(devicesData);
+        setRemoteRequests(remoteRequestsData);
+        setSyncStatus(syncStatusData);
+        const normalizedJobs = localJobsData.map(normalizeLocalJob);
+        setJobs(normalizedJobs);
+        setSelectedJobId((current) =>
+          normalizedJobs.some((job) => job.id === current) ? current : normalizedJobs[0]?.id || null,
+        );
+      } else {
+        const [persistedAssets, jobsData, certsData, auditData, agentsData, centralJobsData] = await Promise.all([
+          apiClient.listAssets(),
+          apiClient.listJobs(),
+          apiClient.listCertificates(),
+          apiClient.listAuditLogs(),
+          apiClient.listAgents(),
+          apiClient.listCentralJobs(),
+        ]);
+        assetsData = persistedAssets;
+        setJobs(jobsData);
+        setSelectedJobId((current) =>
+          jobsData.some((job) => job.id === current) ? current : jobsData[0]?.id || null,
+        );
+        setCerts(certsData);
+        setSelectedCertId((current) =>
+          certsData.some((certificate) => certificate.id === current)
+            ? current
+            : certsData[0]?.id || null,
+        );
+        setAuditLogs(auditData);
+        const normalizedAgents = agentsData.map(normalizeRemoteAgent);
+        setRemoteAgents(normalizedAgents);
+        setCentralJobs(centralJobsData.map(normalizeCentralJob));
+        setSelectedAgentId((current) => current || normalizedAgents[0]?.agent_id || "");
       }
 
-      const response = await fetch(`${apiUrl}/jobs/${jobId}`, {
-        headers,
+      setAssets(assetsData);
+      setSelectedAssetId((current) =>
+        assetsData.some((asset) => asset.id === current) ? current : assetsData[0]?.id || null,
+      );
+      setForm((current) => {
+        if (current.target) return current;
+        const firstValidAsset = assetsData.find((asset) => !getDeviceProtection(asset).blocked);
+        return firstValidAsset ? { ...current, target: firstValidAsset.device_path } : current;
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to load job details.");
-      }
+      return true;
+    } catch (error) {
+      setDataError(formatApiError(error));
+      return false;
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, [apiClient, localMode]);
 
-      const jobData = await response.json();
+  useEffect(() => {
+    if (localMode || !selectedAgentId) return undefined;
+    let cancelled = false;
+    apiClient.listAgentAssets(selectedAgentId)
+      .then((items) => {
+        if (cancelled) return;
+        setRemoteAssets(items);
+        setRemoteJobForm((current) => ({ ...current, assetId: items.some((item) => item.id === current.assetId) ? current.assetId : items[0]?.id || "" }));
+      })
+      .catch((error) => !cancelled && setDataError(formatApiError(error)));
+    return () => { cancelled = true; };
+  }, [apiClient, localMode, selectedAgentId]);
+
+  useEffect(() => {
+    const initialRefreshId = window.setTimeout(
+      () => refreshDashboardData({ showLoading: true }),
+      0,
+    );
+    const intervalId = window.setInterval(() => refreshDashboardData(), 8000);
+    return () => {
+      window.clearTimeout(initialRefreshId);
+      window.clearInterval(intervalId);
+    };
+  }, [refreshDashboardData]);
+
+  const loadJobDetail = useCallback(async (jobId) => {
+    try {
+      const responseData = await apiClient.getJob(jobId);
+      const jobData = localMode ? normalizeLocalJob(responseData) : responseData;
 
       setJobs((prev) =>
         prev.map((job) =>
-          job.id === jobId
-            ? {
-                ...job,
-                ...jobData,
-                audit: jobData.audit || [],
-              }
-            : job
+          job.id === jobId ? { ...job, ...jobData } : job,
         )
       );
 
       return jobData;
     } catch (error) {
-      console.error("Failed to load job detail:", error);
+      setDataError(formatApiError(error));
       return null;
     }
-  }
+  }, [apiClient, localMode]);
 
-  const timers = useRef([]);
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  useEffect(() => {
+    if (!localMode || screen !== "jobdetail" || !selectedJobId) return undefined;
+    const selected = jobs.find((job) => job.id === selectedJobId);
+    if (selected && !shouldPollLocalJob(selected)) return undefined;
+    const pollId = window.setInterval(() => loadJobDetail(selectedJobId), 1000);
+    return () => window.clearInterval(pollId);
+  }, [jobs, loadJobDetail, localMode, screen, selectedJobId]);
 
   function goto(screenId, opts) {
     setScreen(screenId);
 
     if (opts?.jobId) {
       setSelectedJobId(opts.jobId);
+      if (localMode) saveLocalJobId(window.localStorage, opts.jobId);
 
       if (screenId === "jobdetail") {
         loadJobDetail(opts.jobId);
@@ -231,13 +321,6 @@ export default function VyperDashboard() {
     if (opts?.certId) {
       setSelectedCertId(opts.certId);
     }
-  }
-  function updateJob(id, patch) {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
-  }
-  function pushAudit(jobId, entry) {
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, audit: [...j.audit, entry] } : j)));
-    setAuditLogs((prev) => [{ action: entry.action, actor: entry.actor, request: '{ job_id: "' + jobId + '" }', response: "{ status: 200 }", at: entry.at }, ...prev]);
   }
 
   async function submitJob(e) {
@@ -254,36 +337,28 @@ export default function VyperDashboard() {
       );
       return;
     }
+    const submittedDevice = assets.find((asset) => asset.device_path === form.target);
+    const protection = getDeviceProtection(submittedDevice);
+    if (!form.dryRun && protection.blocked) {
+      setFormError(protection.reason || "This device cannot be selected for destructive execution.");
+      return;
+    }
 
     setFormError("");
 
     try {
-      const headers = {
-        "Content-Type": "application/json",
-      };
-
-      if (apiKey) {
-        headers["X-VYPER-API-Key"] = apiKey;
+      const responseData = await apiClient.createSanitizeJob(form);
+      const newJob = localMode ? normalizeLocalJob(responseData) : responseData;
+      if (localMode) {
+        setJobs((current) => [newJob, ...current.filter((job) => job.id !== newJob.id)]);
+        if (newJob.certificate) {
+          setCerts((current) => [
+            newJob.certificate,
+            ...current.filter((certificate) => certificate.id !== newJob.certificate.id),
+          ]);
+        }
       }
-
-      const response = await fetch(`${apiUrl}/jobs/sanitize`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          target: form.target,
-          ata_password: form.ataPassword,
-          dry_run: form.dryRun,
-          authorized: form.authorized,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to create job.");
-      }
-
-      const newJob = await response.json();
-
-      setJobs((prev) => [newJob, ...prev]);
+      await refreshDashboardData();
       setSelectedJobId(newJob.id);
 
       goto("jobdetail", {
@@ -298,39 +373,116 @@ export default function VyperDashboard() {
       });
 
     } catch (error) {
-      console.error(error);
-      setFormError(error.message);
+      setFormError(formatApiError(error));
     }
   }
   
-  const filteredAssets = assets.filter((a) => {
-    if (assetType !== "All" && a.device_type !== assetType) return false;
-    if (assetMount === "Mounted" && !a.mounted) return false;
-    if (assetMount === "Unmounted" && a.mounted) return false;
-    const q = assetSearch.toLowerCase();
-    if (q && !a.model.toLowerCase().includes(q) && !a.serial_number.toLowerCase().includes(q)) return false;
-    return true;
-  });
+  const filteredAssets = filterAssets(assets, { assetType, assetMount, search: assetSearch });
   const selectedAsset = assets.find((a) => a.id === selectedAssetId) || null;
+  const selectedTargetDevice = assets.find((a) => a.device_path === form.target) || null;
+  const selectedTargetProtection = getDeviceProtection(selectedTargetDevice);
 
   const filteredJobs = jobs.filter((j) => jobStateFilter === "All" || j.job_state === jobStateFilter);
   const selectedJob = jobs.find((j) => j.id === selectedJobId) || null;
+  const selectedJobProgress = getProgressPresentation(selectedJob?.progress);
 
   const selectedCert = certs.find((c) => c.id === selectedCertId) || null;
+  const selectedCertView = selectedCert ? certificateView(selectedCert) : null;
+  const selectedCertFinalMeta = selectedCert
+    ? getFinalStatusMeta(selectedCert.final_status)
+    : null;
+  const selectedJobCertificateView = selectedJob?.certificate
+    ? certificateView(selectedJob.certificate)
+    : null;
 
-  const filteredAuditLogs = auditLogs.filter((l) => {
-    if (auditAction !== "All" && l.action !== auditAction) return false;
-    if (auditActor && !l.actor.toLowerCase().includes(auditActor.toLowerCase())) return false;
-    return true;
-  });
+  const filteredAuditLogs = filterAuditLogs(auditLogs, { actor: auditActor, action: auditAction });
   const counts = {
     total: assets.length,
-    verified: jobs.filter((j) => j.job_state === "VERIFIED").length,
+    verified: jobs.filter((j) => getJobStateMeta(j.job_state).successful).length,
     failed: jobs.filter((j) => j.job_state === "FAILED").length,
     inconclusive: jobs.filter((j) => j.job_state === "INCONCLUSIVE").length,
   };
+
+  async function submitRemoteJob(event) {
+    event.preventDefault();
+    if (!selectedAgentId || !remoteJobForm.assetId) {
+      setRemoteJobError("Choose an enrolled agent and synchronized asset.");
+      return;
+    }
+    if (!remoteJobForm.dryRun && !remoteJobForm.authorized) {
+      setRemoteJobError("Central destructive authorization is required. Local approval will still be required separately.");
+      return;
+    }
+    setRemoteJobError("");
+    try {
+      await apiClient.createCentralJob(selectedAgentId, {
+        asset_id: remoteJobForm.assetId,
+        dry_run: remoteJobForm.dryRun,
+        central_authorized: remoteJobForm.authorized,
+        destructive_confirmation: remoteJobForm.dryRun ? null : "SANITIZE",
+        idempotency_key: globalThis.crypto?.randomUUID?.() || `dashboard-${Date.now()}`,
+        expires_in_seconds: 3600,
+        execution_mode: remoteJobForm.executionMode,
+      });
+      await refreshDashboardData();
+    } catch (error) {
+      setRemoteJobError(formatApiError(error));
+    }
+  }
+
+  async function approveRemoteRequest(centralJobId) {
+    setRemoteApprovalError("");
+    try {
+      await apiClient.approveRemoteJob(centralJobId, {
+        approved: true,
+        ata_password: remoteApprovalPassword.trim() || null,
+      });
+      setRemoteApprovalPassword("");
+      await refreshDashboardData();
+    } catch (error) {
+      setRemoteApprovalPassword("");
+      setRemoteApprovalError(formatApiError(error));
+    }
+  }
+
+  function persistSettings() {
+    saveApiSettings(window.localStorage, { apiUrl, apiKey });
+    setSavedMsg("Settings saved.");
+    window.setTimeout(() => setSavedMsg(""), 2200);
+  }
+
+  function resetSettings() {
+    clearApiSettings(window.localStorage);
+    setApiUrl(getDefaultApiBaseUrl());
+    setApiKey("");
+    setSavedMsg("Settings cleared.");
+    window.setTimeout(() => setSavedMsg(""), 2200);
+  }
+
+  async function submitLogin(event) {
+    event.preventDefault();
+    setLoginError("");
+    try {
+      const user = await apiClient.login(loginForm.username, loginForm.password);
+      setOperatorUser(user);
+      setLoginForm({ username: "", password: "" });
+      await refreshDashboardData({ showLoading: true });
+    } catch (error) {
+      setLoginForm((current) => ({ ...current, password: "" }));
+      setLoginError(formatApiError(error));
+    }
+  }
+
+  async function logoutOperator() {
+    await apiClient.logout();
+    setOperatorUser(null);
+    setAssets([]); setJobs([]); setCerts([]); setAuditLogs([]); setRemoteAgents([]); setCentralJobs([]);
+  }
   const NAV = [
     { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
+    ...(!localMode ? [{ id: "agents", label: "Agents", icon: Users }] : []),
+    ...(localMode ? [{ id: "remote-requests", label: "Remote requests", icon: ShieldCheck }] : []),
+    ...(!localMode ? [{ id: "download", label: "Download", icon: DownloadIcon, href: "/download/" }] : []),
     { id: "assets", label: "Assets", icon: HardDrive },
     { id: "jobs", label: "Jobs", icon: ListChecks },
     { id: "certificates", label: "Certificates", icon: FileCheck2 },
@@ -339,7 +491,6 @@ export default function VyperDashboard() {
   ];
   return (
     <div className="nb-root">
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" />
       <style>{`
         .nb-root{
           --bg:#EDEAE0; --ink:#14141A; --paper:#FFFFFF;
@@ -354,7 +505,7 @@ export default function VyperDashboard() {
           --gap:clamp(0.75rem,1.5vw,1rem);
           --card-pad:clamp(0.875rem,1.6vw,1.125rem);
           --shadow:clamp(0.25rem,0.8vw,0.5rem);
-          font-family:'Inter',-apple-system,sans-serif;
+          font-family:var(--font-geist-sans),-apple-system,sans-serif;
           background:var(--bg); color:var(--ink);
           border:3px solid var(--ink); border-radius:0;
           box-shadow:var(--shadow) var(--shadow) 0 var(--ink);
@@ -364,8 +515,8 @@ export default function VyperDashboard() {
           margin:0 auto;
         }
         .nb-root *{box-sizing:border-box;}
-        .nb-heading{font-family:'Space Grotesk',sans-serif; font-weight:700;}
-        .nb-mono{font-family:'JetBrains Mono',monospace; overflow-wrap:anywhere;}
+        .nb-heading{font-family:var(--font-geist-sans),sans-serif; font-weight:700;}
+        .nb-mono{font-family:var(--font-geist-mono),monospace; overflow-wrap:anywhere;}
         .nb-shell{display:grid; grid-template-columns:minmax(11rem,14rem) minmax(0,1fr); min-height:100svh;}
         .nb-sidebar{background:var(--ink); color:#fff; padding:clamp(0.875rem,1.6vw,1.125rem) 0; display:flex; flex-direction:column; border-right:3px solid var(--ink); min-width:0;}
         .nb-brand{padding:0 var(--card-pad) var(--card-pad); margin-bottom:0.5rem; border-bottom:3px solid #3A3A44;}
@@ -435,6 +586,10 @@ export default function VyperDashboard() {
 
         .nb-callout{border:2.5px dashed var(--ink); padding:0.7rem 0.875rem; font-size:0.72rem; color:#4A4940; background:repeating-linear-gradient(135deg,#FCFBF6,#FCFBF6 7px,#F0EDE2 7px,#F0EDE2 14px); overflow-wrap:anywhere;}
         .nb-callout b{color:var(--ink);}
+        .nb-progress{height:1rem; border:2px solid var(--ink); background:var(--pend-bg); margin-top:0.5rem; overflow:hidden;}
+        .nb-progress-fill{height:100%; background:var(--accent); transition:width .2s ease;}
+        .nb-spinner{display:inline-block; width:0.75rem; height:0.75rem; border:2px solid var(--pend-line); border-top-color:var(--accent); border-radius:50%; animation:nb-spin .8s linear infinite; margin-right:0.4rem; vertical-align:-0.1rem;}
+        @keyframes nb-spin{to{transform:rotate(360deg);}}
 
         .nb-pipeline{display:flex; align-items:flex-start; gap:0; margin:0.5rem 0 0.125rem; overflow-x:auto; padding-bottom:0.25rem;}
         .nb-pstep{flex:1 0 min(7rem,45vw); text-align:center; position:relative; padding:0 0.25rem;}
@@ -499,6 +654,14 @@ export default function VyperDashboard() {
           <nav className="nb-nav">
             {NAV.map((n) => {
               const Icon = n.icon;
+              if (n.href) {
+                return (
+                  <Link key={n.id} className="nb-nav-item" href={n.href}>
+                    <Icon size={16} aria-hidden="true" />
+                    {n.label}
+                  </Link>
+                );
+              }
               return (
                 <button key={n.id} className={"nb-nav-item" + (screen === n.id ? " active" : "")} onClick={() => goto(n.id)}>
                   <Icon size={16} aria-hidden="true" />
@@ -507,9 +670,26 @@ export default function VyperDashboard() {
               );
             })}
           </nav>
-          <div className="nb-sidebar-footer"><span className="nb-dot" />API connected</div>
+          <div className="nb-sidebar-footer">
+            <span className="nb-dot" style={!backendConnected ? { background: "var(--bad-line)" } : {}} />
+            {backendConnected ? "API connected" : "API disconnected"}
+          </div>
+          {!localMode && operatorUser ? <button className="nb-nav-item" type="button" onClick={logoutOperator}>
+            Sign out ({operatorUser.role})
+          </button> : null}
         </aside>
         <main className="nb-main">
+          {!localMode && operatorUser === null ? <form className="nb-card" onSubmit={submitLogin}>
+            <div className="nb-crumbs">Authenticated access</div>
+            <h1 className="nb-h1 nb-heading">Sign in to VYPER</h1>
+            <p className="nb-sub">Use a central operator account. Session credentials remain in a Secure, HttpOnly cookie.</p>
+            <div className="nb-field"><label>Username</label><input type="text" autoComplete="username" required value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} /></div>
+            <div className="nb-field"><label>Password</label><input type="password" autoComplete="current-password" required value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} /></div>
+            {loginError ? <div className="nb-error">{loginError}</div> : null}
+            <div className="nb-btn-row"><button className="nb-btn primary" type="submit">Sign in</button></div>
+          </form> : null}
+          {loading && <div className="nb-callout" style={{ marginBottom: 16 }}>Loading VYPER data…</div>}
+          {dataError && <div className="nb-error" style={{ marginBottom: 16 }}>{dataError}</div>}
           {screen === "dashboard" && (
             <>
               <div className="nb-crumbs">Dashboard</div>
@@ -528,14 +708,15 @@ export default function VyperDashboard() {
                     <thead><tr><th>Target</th><th>Job state</th><th>Final status</th><th>Dry run</th><th>Updated</th></tr></thead>
                     <tbody>
                       {jobs.slice(0, 5).map((j) => {
-                        const meta = STATE_META[j.job_state];
+                        const meta = getJobStateMeta(j.job_state);
+                        const finalMeta = getFinalStatusMeta(j.final_status);
                         return (
                           <tr key={j.id} className="nb-row" onClick={() => goto("jobdetail", { jobId: j.id })}>
                             <td className="strong nb-mono">{j.target}</td>
                             <td><Badge tone={meta.tone}>{meta.label}</Badge></td>
-                            <td>{j.final_status ? <Badge tone={j.final_status === "SUCCESS" ? "ok" : "bad"}>{j.final_status}</Badge> : <Badge tone="pend">—</Badge>}</td>
+                            <td><Badge tone={finalMeta.tone}>{finalMeta.label}</Badge></td>
                             <td>{j.dry_run ? "Yes" : "No"}</td>
-                            <td>{j.updated}</td>
+                            <td>{j.updated_at || j.created_at || "—"}</td>
                           </tr>
                         );
                       })}
@@ -547,16 +728,119 @@ export default function VyperDashboard() {
                   <table>
                     <thead><tr><th>Certificate</th><th>Outcome</th></tr></thead>
                     <tbody>
-                      {certs.slice(0, 4).map((c) => (
-                        <tr key={c.id} className="nb-row" onClick={() => goto("certificates", { certId: c.id })}>
-                          <td className="nb-mono">{c.id}</td>
-                          <td><Badge tone={c.final_status === "SUCCESS" ? "ok" : "bad"}>{c.final_status}</Badge></td>
-                        </tr>
-                      ))}
+                      {certs.slice(0, 4).map((c) => {
+                        const finalMeta = getFinalStatusMeta(c.final_status);
+                        return (
+                          <tr key={c.id} className="nb-row" onClick={() => goto("certificates", { certId: c.id })}>
+                            <td className="nb-mono">{c.certificate_id || "—"}</td>
+                            <td><Badge tone={finalMeta.tone}>{finalMeta.label}</Badge></td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                   <div className="nb-btn-row"><button className="nb-btn small" onClick={() => goto("certificates")}>View all certificates</button></div>
                 </div>
+              </div>
+            </>
+          )}
+          {screen === "agents" && !localMode && (
+            <>
+              <div className="nb-crumbs">Central / Agents</div>
+              <h1 className="nb-h1 nb-heading">Remote agents</h1>
+              <p className="nb-sub">Agents connect outbound. Destructive requests remain blocked until a local operator approves them.</p>
+              <div className="nb-card">
+                <div className="nb-section-title">Enrolled agents</div>
+                <table>
+                  <thead><tr><th>Name</th><th>Hostname</th><th>Platform</th><th>Architecture</th><th>Version</th><th>Status</th><th>Last seen</th><th>Assets</th><th>Active</th><th>Verified</th></tr></thead>
+                  <tbody>
+                    {remoteAgents.map((agent) => (
+                      <tr key={agent.agent_id} className="nb-row" onClick={() => setSelectedAgentId(agent.agent_id)}>
+                        <td className="strong">{agent.display_name}</td><td>{agent.hostname}</td><td>{agent.platform}</td>
+                        <td>{agent.architecture}</td><td>{agent.agent_version}</td>
+                        <td><Badge tone={agent.online ? "ok" : agent.status === "REVOKED" ? "bad" : "pend"}>{agent.status}</Badge></td>
+                        <td>{agent.last_seen_at || "Never"}</td><td>{agent.asset_count}</td><td>{agent.active_jobs}</td><td>{agent.verified_jobs}</td>
+                      </tr>
+                    ))}
+                    {remoteAgents.length === 0 && <tr><td colSpan={10}>No enrolled agents.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+              <div className="nb-grid-2">
+                <div className="nb-card">
+                  <div className="nb-section-title">Synchronized assets <span className="nb-hint">owned by selected agent</span></div>
+                  <div className="nb-field"><label>Agent</label><select value={selectedAgentId} onChange={(event) => setSelectedAgentId(event.target.value)}>{remoteAgents.map((agent) => <option key={agent.agent_id} value={agent.agent_id}>{agent.display_name} — {agent.hostname}</option>)}</select></div>
+                  <table>
+                    <thead><tr><th>Agent</th><th>Path</th><th>Model</th><th>Serial</th><th>Size</th><th>Safety</th></tr></thead>
+                    <tbody>{remoteAssets.map((asset) => <tr key={asset.id}><td className="nb-mono">{asset.agent_id}</td><td className="nb-mono">{asset.device_path}</td><td>{asset.model || "Unknown"}</td><td>{asset.serial_number || "Unavailable"}</td><td>{formatBytes(asset.size_bytes)}</td><td>{asset.profile_json?.is_system_device ? <Badge tone="bad">System</Badge> : <Badge tone="ok">Observed</Badge>}</td></tr>)}</tbody>
+                  </table>
+                </div>
+                <div className="nb-card">
+                  <div className="nb-section-title">Create remote job</div>
+                  <form onSubmit={submitRemoteJob}>
+                    <div className="nb-field"><label>Synchronized asset</label><select value={remoteJobForm.assetId} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, assetId: event.target.value })}>{remoteAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.device_path} — {asset.model || "Unknown"} — {asset.serial_number || "No serial"}</option>)}</select></div>
+                    <div className="nb-field"><label>Execution mode</label><select value={remoteJobForm.executionMode} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, executionMode: event.target.value })}><option value="normal_local">Normal local job</option><option value="boot_sanitize">System-disk temporary boot job</option></select></div>
+                    {remoteJobForm.executionMode === "boot_sanitize" && <div className="nb-callout"><b>No-USB boot workflow.</b> The installed OS only prepares a one-shot boot. Sanitization requires fresh confirmation in the independent boot environment.</div>}
+                    <div className="nb-check"><input type="checkbox" checked={remoteJobForm.dryRun} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, dryRun: event.target.checked })} /><div>Dry run. The agent may execute this automatically if locally configured.</div></div>
+                    {!remoteJobForm.dryRun && <div className="nb-check" style={{ marginTop: 8 }}><input type="checkbox" checked={remoteJobForm.authorized} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, authorized: event.target.checked })} /><div><b>Central authorization.</b> This does not replace local operator approval.</div></div>}
+                    {remoteJobError && <div className="nb-error">{remoteJobError}</div>}
+                    <div className="nb-btn-row"><button className="nb-btn primary" disabled={!remoteJobForm.assetId}>Queue remote job</button></div>
+                  </form>
+                </div>
+              </div>
+              <div className="nb-card">
+                <div className="nb-section-title">Remote job delivery and execution</div>
+                <table>
+                  <thead><tr><th>Central job</th><th>Agent</th><th>Target</th><th>Mode</th><th>Delivery</th><th>Local state</th><th>Final</th><th>Progress</th><th>Created</th><th>Started</th><th>Finished</th></tr></thead>
+                  <tbody>{centralJobs.map((job) => {
+                    const progress = getProgressPresentation(job.progress);
+                    return <tr key={job.central_job_id}><td className="nb-mono">{job.central_job_id}</td><td className="nb-mono">{job.agent_id}</td><td className="nb-mono">{job.requested_target}</td><td>{job.execution_mode === "boot_sanitize" ? "SYSTEM-DISK BOOT" : "NORMAL LOCAL"}</td><td><Badge tone={job.waiting_local_approval ? "warn" : "acc"}>{job.waiting_local_approval ? "WAITING FOR LOCAL APPROVAL" : job.status}</Badge></td><td>{job.local_execution_state || "Not started"}</td><td><Badge tone={getFinalStatusMeta(job.final_status).tone}>{getFinalStatusMeta(job.final_status).label}</Badge></td><td>{job.progress ? progress.label : "—"}</td><td>{job.created_at}</td><td>{job.started_at || "—"}</td><td>{job.finished_at || "—"}</td></tr>;
+                  })}</tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {screen === "remote-requests" && localMode && (
+            <>
+              <div className="nb-crumbs">Local console / Remote requests</div>
+              <h1 className="nb-h1 nb-heading">Remote sanitization requests</h1>
+              <p className="nb-sub">Central authorization never replaces local approval. The local agent re-discovers and validates the selected device immediately before submission.</p>
+              <div className="nb-callout" style={{ marginBottom: 12 }}>
+                <b>Central sync:</b> {syncStatus?.enrolled ? `Enrolled as ${syncStatus.agent_id}` : "Not enrolled"}
+                {syncStatus?.configured ? ` · outbox pending: ${syncStatus.outbox_pending}` : " · configure with vyper enroll"}
+              </div>
+              <div className="nb-card">
+                <div className="nb-section-title">Claimed requests</div>
+                <div className="nb-callout" style={{ marginBottom: 12 }}>
+                  <b>Remote sanitization request pending approval.</b> Review the stable identity, current local device details, and safety state before approving any destructive request.
+                </div>
+                <div className="nb-field">
+                  <label>ATA password <span className="nb-hint">transient; only applies if the selected policy requires ATA secure erase</span></label>
+                  <input type="password" placeholder="Optional" value={remoteApprovalPassword} onChange={(event) => setRemoteApprovalPassword(event.target.value)} />
+                </div>
+                {remoteApprovalError && <div className="nb-error" style={{ marginBottom: 12 }}>{remoteApprovalError}</div>}
+                <table>
+                  <thead><tr><th>Central job</th><th>Requested target</th><th>Stable identity</th><th>Mode</th><th>Status</th><th>Expires</th><th>Local job</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {remoteRequests.map((request) => (
+                      <tr key={request.central_job_id}>
+                        <td className="nb-mono">{request.central_job_id}</td>
+                        <td className="nb-mono">{request.requested_target}</td>
+                        <td className="nb-mono">{request.target_identity}</td>
+                        <td>{request.payload?.execution_mode === "boot_sanitize" ? "System-disk boot" : request.dry_run ? "Dry run" : "Destructive"}</td>
+                        <td><Badge tone={request.status === "SUBMITTED" ? "ok" : request.dry_run ? "acc" : "warn"}>{request.status}</Badge></td>
+                        <td>{request.expires_at}</td>
+                        <td className="nb-mono">{request.local_job_id || "—"}</td>
+                        <td>
+                          {request.payload?.execution_mode === "boot_sanitize" ? "Use vyper system-disk prepare" : !request.dry_run && request.status === "WAITING_LOCAL_APPROVAL" ? (
+                            <button type="button" className="nb-btn small primary" onClick={() => approveRemoteRequest(request.central_job_id)}>Approve locally</button>
+                          ) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                    {remoteRequests.length === 0 && <tr><td colSpan={8}>No remote requests have been claimed by this local agent.</td></tr>}
+                  </tbody>
+                </table>
               </div>
             </>
           )}
@@ -569,7 +853,7 @@ export default function VyperDashboard() {
                 <div className="nb-card">
                   <div className="nb-filter-row">
                     <select value={assetType} onChange={(e) => setAssetType(e.target.value)}>
-                      {["All", "HDD", "SSD", "NVMe"].map((o) => <option key={o}>{o}</option>)}
+                      {["All", "HDD", "SATA SSD", "NVMe"].map((o) => <option key={o}>{o}</option>)}
                     </select>
                     <select value={assetMount} onChange={(e) => setAssetMount(e.target.value)}>
                       {["All", "Mounted", "Unmounted"].map((o) => <option key={o}>{o}</option>)}
@@ -580,18 +864,30 @@ export default function VyperDashboard() {
                     </div>
                   </div>
                   <table>
-                    <thead><tr><th>Device path</th><th>Model</th><th>Type</th><th>Mounted</th><th>Flags</th></tr></thead>
+                    <thead><tr><th>Device path</th><th>Model</th><th>Size</th><th>Type</th><th>Serial</th><th>Mounted</th><th>Flags</th></tr></thead>
                     <tbody>
                       {filteredAssets.map((a) => (
                         <tr key={a.id} className="nb-row" style={a.is_system_device ? { background: "#FBEDEA" } : {}} onClick={() => setSelectedAssetId(a.id)}>
                           <td className="strong nb-mono">{a.device_path}</td>
-                          <td>{a.model}</td>
-                          <td>{a.device_type}</td>
+                          <td>{a.model || "Unknown"}</td>
+                          <td>{formatBytes(a.size_bytes)}</td>
+                          <td>{a.device_type || "Unknown"}</td>
+                          <td className="nb-mono">{a.serial_number || "Unavailable"}</td>
                           <td>{a.mounted ? "Yes" : "No"}</td>
-                          <td>{a.is_system_device ? <Badge tone="bad">System device</Badge> : a.mounted_partitions.length > 1 ? <Badge tone="warn">{a.mounted_partitions.length} partitions</Badge> : "—"}</td>
+                          <td>
+                            {a.is_system_device !== false ? (
+                              <Badge tone="bad">{a.is_system_device ? "System device" : "Protection unknown"}</Badge>
+                            ) : a.profile_error ? (
+                              <Badge tone="bad">Profile failed</Badge>
+                            ) : a.mounted ? (
+                              <Badge tone="warn">Mounted</Badge>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
                         </tr>
                       ))}
-                      {filteredAssets.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "#8A8878" }}>No assets match these filters.</td></tr>}
+                      {filteredAssets.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "#8A8878" }}>No assets match these filters.</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -613,7 +909,12 @@ export default function VyperDashboard() {
 
                       <div className="nb-detail-row">
                         <div className="k">serial_number</div>
-                        <div className="v">{selectedAsset.serial_number}</div>
+                        <div className="v">{selectedAsset.serial_number || "Unavailable"}</div>
+                      </div>
+
+                      <div className="nb-detail-row">
+                        <div className="k">model / size</div>
+                        <div className="v">{selectedAsset.model || "Unknown"} / {formatBytes(selectedAsset.size_bytes)}</div>
                       </div>
 
                       <div className="nb-detail-row">
@@ -629,13 +930,23 @@ export default function VyperDashboard() {
                       <div className="nb-detail-row">
                         <div className="k">mounted_partitions</div>
                         <div className="v">
-                          {selectedAsset.mounted_partitions.join(", ") || "—"}
+                          {mountedPartitionsText(selectedAsset.mounted_partitions)}
                         </div>
                       </div>
 
                       {selectedAsset.is_system_device && (
                         <div className="nb-callout" style={{ marginTop: 12 }}>
-                          <b>Blocked:</b> system-associated device. Destructive jobs cannot target this asset.
+                          <b>Protected:</b> This is the system disk and cannot be wiped from the currently running operating system.
+                        </div>
+                      )}
+                      {selectedAsset.mounted && (
+                        <div className="nb-callout" style={{ marginTop: 12 }}>
+                          <b>Mounted device:</b> {mountedPartitionsText(selectedAsset.mounted_partitions)}. Review and unmount every mounted filesystem before destructive execution.
+                        </div>
+                      )}
+                      {selectedAsset.profile_error && (
+                        <div className="nb-error" style={{ marginTop: 12 }}>
+                          Discovery safety check failed: {selectedAsset.profile_error}. Destructive execution is blocked because device protection could not be established.
                         </div>
                       )}
                     </>
@@ -658,20 +969,21 @@ export default function VyperDashboard() {
                   <div className="nb-section-title">Job queue</div>
                   <div className="nb-filter-row">
                     <select value={jobStateFilter} onChange={(e) => setJobStateFilter(e.target.value)}>
-                      {["All", ...Object.keys(STATE_META)].map((o) => <option key={o}>{o}</option>)}
+                      {["All", ...Object.keys(JOB_STATE_META)].map((o) => <option key={o}>{o}</option>)}
                     </select>
                   </div>
                   <table>
                     <thead><tr><th>Target</th><th>Pathway</th><th>Job state</th><th>Final status</th><th>Dry run</th></tr></thead>
                     <tbody>
                       {filteredJobs.map((j) => {
-                        const meta = STATE_META[j.job_state];
+                        const meta = getJobStateMeta(j.job_state);
+                        const finalMeta = getFinalStatusMeta(j.final_status);
                         return (
                           <tr key={j.id} className="nb-row" onClick={() => goto("jobdetail", { jobId: j.id })}>
                             <td className="strong nb-mono">{j.target}</td>
                             <td>{j.pathway}</td>
                             <td><Badge tone={meta.tone}>{meta.label}</Badge></td>
-                            <td>{j.final_status ? <Badge tone={j.final_status === "SUCCESS" ? "ok" : "bad"}>{j.final_status}</Badge> : <Badge tone="pend">—</Badge>}</td>
+                            <td><Badge tone={finalMeta.tone}>{finalMeta.label}</Badge></td>
                             <td>{j.dry_run ? "Yes" : "No"}</td>
                           </tr>
                         );
@@ -685,22 +997,34 @@ export default function VyperDashboard() {
                   <form onSubmit={submitJob}>
                     <div className="nb-field">
                       <label>Target device</label>
-                      {assets.filter((a) => !a.is_system_device).length > 0 ? (
+                      {assets.length > 0 ? (
                         <select
                           value={form.target}
                           onChange={(e) => setForm({ ...form, target: e.target.value })}
                         >
-                          {assets
-                            .filter((a) => !a.is_system_device)
-                            .map((a) => (
-                              <option key={a.id} value={a.device_path}>
-                                {a.device_path} — {a.model} ({a.device_type})
+                          {assets.map((a) => (
+                              <option
+                                key={a.id}
+                                value={a.device_path}
+                                disabled={!form.dryRun && getDeviceProtection(a).blocked}
+                              >
+                                {a.device_path} — {a.model || "Unknown model"} — {formatBytes(a.size_bytes)} — {a.device_type || "Unknown type"} — {a.serial_number || "No serial"}{getDeviceProtection(a).blocked ? " — PROTECTED" : a.mounted ? " — MOUNTED" : ""}
                               </option>
                             ))}
                         </select>
                       ) : (
                         <div className="nb-callout">
                           <b>No usable assets available.</b> The backend returned no devices.
+                        </div>
+                      )}
+                      {selectedTargetProtection.reason && (
+                        <div className={selectedTargetProtection.blocked ? "nb-error" : "nb-callout"} style={{ marginTop: 8 }}>
+                          {selectedTargetProtection.reason}
+                        </div>
+                      )}
+                      {selectedTargetDevice?.mounted && (
+                        <div className="nb-callout" style={{ marginTop: 8 }}>
+                          <b>Mounted device:</b> {mountedPartitionsText(selectedTargetDevice.mounted_partitions)}. Destructive execution requires explicit authorization and should only occur after unmounting.
                         </div>
                       )}
                     </div>
@@ -722,8 +1046,8 @@ export default function VyperDashboard() {
                     </div>
                     {formError && <div className="nb-error">{formError}</div>}
                     <div className="nb-btn-row">
-                      <button type="submit" className="nb-btn primary">Submit job</button>
-                      <button type="button" className="nb-btn" onClick={() => setForm({ target: assets.find((a) => !a.is_system_device)?.device_path || "", ataPassword: "", dryRun: true, authorized: false })}>Reset</button>
+                      <button type="submit" className="nb-btn primary" disabled={!form.dryRun && selectedTargetProtection.blocked}>Submit job</button>
+                      <button type="button" className="nb-btn" onClick={() => setForm({ target: assets.find((a) => !getDeviceProtection(a).blocked)?.device_path || "", ataPassword: "", dryRun: true, authorized: false })}>Reset</button>
                     </div>
                   </form>
                 </div>
@@ -741,6 +1065,19 @@ export default function VyperDashboard() {
                 <div className="nb-callout" style={{ marginTop: 12 }}>
                   <b>job_state:</b> {selectedJob.job_state} &nbsp; · &nbsp; <b>final_status:</b> {selectedJob.final_status || "not yet set"} &nbsp; · &nbsp; <b>dry_run:</b> {String(selectedJob.dry_run)}
                 </div>
+                {selectedJob.progress && selectedJobProgress.kind === "bytes" && (
+                  <div className="nb-callout" style={{ marginTop: 12 }}>
+                    <b>Measured progress:</b> {selectedJobProgress.label} ({selectedJobProgress.percentage.toFixed(1)}%)
+                    <div className="nb-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={selectedJobProgress.percentage}>
+                      <div className="nb-progress-fill" style={{ width: `${selectedJobProgress.percentage}%` }} />
+                    </div>
+                  </div>
+                )}
+                {selectedJob.progress && selectedJobProgress.kind === "indeterminate" && !TERMINAL_JOB_STATES.has(selectedJob.job_state) && (
+                  <div className="nb-callout" style={{ marginTop: 12 }}>
+                    <span className="nb-spinner" aria-hidden="true" />{selectedJobProgress.label}
+                  </div>
+                )}
               </div>
               <div className="nb-grid-2">
                 <div>
@@ -748,15 +1085,22 @@ export default function VyperDashboard() {
                   <JsonPanel title="execution_json" json={selectedJob.execution_json} defaultOpen />
                   <JsonPanel title="verification_json" json={selectedJob.verification_json} />
                   <JsonPanel title="evidence_json" json={selectedJob.evidence_json} />
-                  {selectedJob.certificate && (
+                  <JsonPanel title="state_history" json={selectedJob.state_history_json} />
+                  {selectedJob.error_json && <JsonPanel title="sanitized_error" json={selectedJob.error_json} defaultOpen />}
+                  {selectedJobCertificateView && (
                     <div className="nb-stamp-card" style={{ marginTop: 14 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                        <ShieldCheck size={18} aria-hidden="true" />
-                        <span className="nb-heading" style={{ fontSize: 13 }}>Certificate issued</span>
+                        {selectedJobCertificateView.successfulClaim
+                          ? <ShieldCheck size={18} aria-hidden="true" />
+                          : <CircleDot size={18} aria-hidden="true" />}
+                        <span className="nb-heading" style={{ fontSize: 13 }}>{selectedJobCertificateView.title}</span>
+                        <Badge tone={selectedJobCertificateView.tone}>{selectedJobCertificateView.detail}</Badge>
                       </div>
-                      <div className="nb-detail-row"><div className="k">certificate_id</div><div className="v">{selectedJob.certificate.id}</div></div>
-                      <div className="nb-detail-row"><div className="k">certificate_hash</div><div className="v">{selectedJob.certificate.hash}</div></div>
-                      <div className="nb-detail-row"><div className="k">standard</div><div className="v">{selectedJob.certificate.standard}</div></div>
+                      <div className="nb-detail-row"><div className="k">certificate_id</div><div className="v">{selectedJobCertificateView.certificateId}</div></div>
+                      <div className="nb-detail-row"><div className="k">certificate_hash</div><div className="v">{selectedJobCertificateView.certificateHash}</div></div>
+                      <div className="nb-detail-row"><div className="k">outcome_kind</div><div className="v">{selectedJobCertificateView.outcomeKind}</div></div>
+                      <div className="nb-detail-row"><div className="k">successful_sanitization_claim</div><div className="v">{String(selectedJobCertificateView.successfulClaim)}</div></div>
+                      <JsonPanel title="certificate_json" json={selectedJobCertificateView.certificateJson} />
                     </div>
                   )}
                 </div>
@@ -764,15 +1108,22 @@ export default function VyperDashboard() {
                   <div className="nb-section-title" style={{ marginTop: 4 }}>Audit log entries <span className="nb-hint">this job</span></div>
                   <div className="nb-card" style={{ padding: 0 }}>
                     <table>
-                      <thead><tr><th>Action</th><th>Actor</th><th>At</th></tr></thead>
+                      <thead><tr><th>Action</th><th>Actor</th><th>Target</th><th>Created</th></tr></thead>
                       <tbody>
-                        {(selectedJob.audit || []).map((a, i) => (
-                          <tr key={i}>
-                            <td>{a.action}</td>
-                            <td>{a.actor}</td>
-                            <td className="nb-mono">{a.at}</td>
-                          </tr>
-                        ))}
+                        {(selectedJob.audit_logs || []).map((log) => {
+                          const audit = auditLogView(log);
+                          return (
+                            <tr key={log.id}>
+                              <td>{audit.action}</td>
+                              <td>{audit.actor}</td>
+                              <td className="nb-mono">{audit.target}</td>
+                              <td className="nb-mono">{audit.createdAt}</td>
+                            </tr>
+                          );
+                        })}
+                        {(selectedJob.audit_logs || []).length === 0 && (
+                          <tr><td colSpan={4} style={{ textAlign: "center", color: "#8A8878" }}>No audit entries for this job.</td></tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -806,38 +1157,40 @@ export default function VyperDashboard() {
                           </td>
                         </tr>
                       ) : (
-                        certs.map((c) => (
-                          <tr
-                            key={c.id}
-                            className="nb-row"
-                            onClick={() => setSelectedCertId(c.id)}
-                          >
-                            <td className="nb-mono">{c.id}</td>
-                            <td className="nb-mono">{c.target}</td>
-                            <td>
-                              <Badge tone={c.final_status === "SUCCESS" ? "ok" : "bad"}>
-                                {c.final_status}
-                              </Badge>
-                            </td>
-                            <td>{c.claim ? "Successful" : "Not claimed"}</td>
-                          </tr>
-                        ))
+                        certs.map((c) => {
+                          const finalMeta = getFinalStatusMeta(c.final_status);
+                          return (
+                            <tr
+                              key={c.id}
+                              className="nb-row"
+                              onClick={() => setSelectedCertId(c.id)}
+                            >
+                              <td className="nb-mono">{c.certificate_id || "—"}</td>
+                              <td className="nb-mono">{c.target || "—"}</td>
+                              <td><Badge tone={finalMeta.tone}>{finalMeta.label}</Badge></td>
+                              <td>{c.successful_sanitization_claim ? "Successful" : "Not claimed"}</td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
                 </div>
-                {selectedCert ? (
+                {selectedCert && selectedCertView ? (
                   <div className="nb-stamp-card">
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                      <ShieldCheck size={20} aria-hidden="true" />
+                      {selectedCertView.successfulClaim
+                        ? <ShieldCheck size={20} aria-hidden="true" />
+                        : <CircleDot size={20} aria-hidden="true" />}
                       <span className="nb-heading" style={{ fontSize: 14 }}>
-                        Certificate detail
+                        {selectedCertView.title}
                       </span>
+                      <Badge tone={selectedCertView.tone}>{selectedCertView.detail}</Badge>
                     </div>
 
                     <div className="nb-detail-row">
                       <div className="k">certificate_id</div>
-                      <div className="v">{selectedCert.id}</div>
+                      <div className="v">{selectedCertView.certificateId}</div>
                     </div>
 
                     <div className="nb-detail-row">
@@ -854,27 +1207,32 @@ export default function VyperDashboard() {
                       <div className="k">final_status</div>
                       <div className="v">
                         <Badge
-                          tone={selectedCert.final_status === "SUCCESS" ? "ok" : "bad"}
+                          tone={selectedCertFinalMeta.tone}
                           stamp
                         >
-                          {selectedCert.final_status}
+                          {selectedCertFinalMeta.label}
                         </Badge>
                       </div>
                     </div>
 
                     <div className="nb-detail-row">
                       <div className="k">successful_sanitization_claim</div>
-                      <div className="v">{String(selectedCert.claim)}</div>
+                      <div className="v">{String(selectedCertView.successfulClaim)}</div>
+                    </div>
+
+                    <div className="nb-detail-row">
+                      <div className="k">outcome_kind</div>
+                      <div className="v">{selectedCertView.outcomeKind}</div>
                     </div>
 
                     <div className="nb-detail-row">
                       <div className="k">certificate_hash</div>
-                      <div className="v">{selectedCert.hash}</div>
+                      <div className="v">{selectedCertView.certificateHash}</div>
                     </div>
 
                     <JsonPanel
                       title="certificate_json"
-                      json={'{\n  "standard": "' + selectedCert.standard + '",\n  "issued_at": "' + selectedCert.issued + '"\n}'}
+                      json={selectedCertView.certificateJson}
                     />
                   </div>
                 ) : (
@@ -903,18 +1261,22 @@ export default function VyperDashboard() {
                   </select>
                 </div>
                 <table>
-                  <thead><tr><th>Action</th><th>Actor</th><th>Request</th><th>Response</th><th>At</th></tr></thead>
+                  <thead><tr><th>Action</th><th>Actor</th><th>Target</th><th>Request</th><th>Response</th><th>Created</th></tr></thead>
                   <tbody>
-                    {filteredAuditLogs.map((l, i) => (
-                      <tr key={i} className="nb-row">
-                        <td className="strong">{l.action}</td>
-                        <td>{l.actor}</td>
-                        <td className="nb-mono">{l.request}</td>
-                        <td className="nb-mono">{l.response}</td>
-                        <td className="nb-mono">{l.at}</td>
-                      </tr>
-                    ))}
-                    {filteredAuditLogs.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "#8A8878" }}>No entries match these filters.</td></tr>}
+                    {filteredAuditLogs.map((log) => {
+                      const audit = auditLogView(log);
+                      return (
+                        <tr key={log.id} className="nb-row">
+                          <td className="strong">{audit.action}</td>
+                          <td>{audit.actor}</td>
+                          <td className="nb-mono">{audit.target}</td>
+                          <td className="nb-mono">{JSON.stringify(audit.requestJson)}</td>
+                          <td className="nb-mono">{JSON.stringify(audit.responseJson)}</td>
+                          <td className="nb-mono">{audit.createdAt}</td>
+                        </tr>
+                      );
+                    })}
+                    {filteredAuditLogs.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", color: "#8A8878" }}>No entries match these filters.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -924,19 +1286,21 @@ export default function VyperDashboard() {
             <>
               <div className="nb-crumbs">Settings</div>
               <h1 className="nb-h1 nb-heading">Settings</h1>
-              <p className="nb-sub">API base URL and optional authentication.</p>
+              <p className="nb-sub">{localMode ? "Local mode connects directly to the execution service on this machine." : "Central mode connects to the persisted management API."}</p>
+			  <p className="nb-mono">VYPER {PRODUCT_VERSION}</p>
               <div className="nb-card" style={{ maxWidth: 460 }}>
                 <div className="nb-field">
-                  <label>VYPER_API_BASE_URL</label>
+                  <label>{localMode ? "NEXT_PUBLIC_VYPER_LOCAL_AGENT_API_BASE_URL" : "NEXT_PUBLIC_VYPER_API_BASE_URL"}</label>
                   <input type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
                 </div>
                 <div className="nb-field">
-                  <label>X-VYPER-API-Key</label>
-                  <input type="password" placeholder="Optional — only if backend enforces auth" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+                  {localMode ? <><label>Local API credential</label>
+                  <input type="password" autoComplete="off" placeholder="Loopback local-agent credential" value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></> : null}
                   <div className="nb-help">Sent as a request header when set.</div>
                 </div>
                 <div className="nb-btn-row">
-                  <button className="nb-btn primary" type="button" onClick={() => { setSavedMsg("Settings saved."); setTimeout(() => setSavedMsg(""), 2200); }}>Save settings</button>
+                  <button className="nb-btn primary" type="button" onClick={persistSettings}>Save settings</button>
+                  <button className="nb-btn" type="button" onClick={resetSettings}>Clear / reset</button>
                   {savedMsg && <Badge tone="ok">{savedMsg}</Badge>}
                 </div>
               </div>

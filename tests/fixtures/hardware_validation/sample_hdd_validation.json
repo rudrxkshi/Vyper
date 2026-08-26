@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "validation_kind": "physical_hdd",
+  "mock_fixture": true,
+  "generated_at": "2026-08-25T12:00:00Z",
+  "vyper_version": "1.0.0-rc1",
+  "device_identity": {
+    "device_path": "/dev/sdz",
+    "model": "DISPOSABLE MOCK HDD",
+    "serial_number": "MOCK-HDD-123456",
+    "wwn": "wwn-mock-hdd-123456",
+    "stable_id": "wwn-mock-hdd-123456",
+    "size_bytes": 5368709120,
+    "transport": "sata",
+    "interface": "ATA/SATA",
+    "rotational": true,
+    "device_type": "HDD",
+    "is_system_device": false,
+    "mounted": false,
+    "partitions": []
+  },
+  "pre_test_profile": {
+    "device_path": "/dev/sdz",
+    "device_type": "HDD",
+    "serial_number": "MOCK-HDD-123456",
+    "model": "DISPOSABLE MOCK HDD",
+    "size_bytes": 5368709120,
+    "rotational": true,
+    "is_system_device": false,
+    "mounted": false
+  },
+  "test_data_manifest": {
+    "mock_fixture": true,
+    "filesystem": "ext4",
+    "filesystem_uuid": "00000000-0000-0000-0000-000000000000",
+    "files": [
+      {"path": "vyper-validation/secret.txt", "size_bytes": 672, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"path": "vyper-validation/sample.bin", "size_bytes": 1048576, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      {"path": "vyper-validation/random.bin", "size_bytes": 1048576, "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+    ]
+  },
+  "local_job_id": "mock-local-job",
+  "selected_pathway": "HDD_OVERWRITE",
+  "policy_result": {"selected_pathway": "HDD_OVERWRITE", "reason": "Mock fixture only."},
+  "execution_metadata": {"mock_fixture": true, "metadata": {"bytes_written": 5368709120, "total_bytes": 5368709120}},
+  "progress_summary": {
+    "measurement_count": 2,
+    "measurements": [
+      {"timestamp": "2026-08-25T12:01:00Z", "bytes_completed": 2684354560, "bytes_total": 5368709120},
+      {"timestamp": "2026-08-25T12:02:00Z", "bytes_completed": 5368709120, "bytes_total": 5368709120}
+    ],
+    "final": {"timestamp": "2026-08-25T12:02:00Z", "bytes_completed": 5368709120, "bytes_total": 5368709120}
+  },
+  "verification_result": {"status": "VERIFIED", "verified": true, "mock_fixture": true},
+  "evidence_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "certificate_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "integrity": {"evidence_valid": true, "certificate_valid": true, "evidence_certificate_bound": true},
+  "identity_preserved": true,
+  "independent_post_checks": {
+    "filesystem_detected": false,
+    "blkid_detected": false,
+    "file_type": "/dev/sdz: data",
+    "sample_offsets": [0, 2684352512, 5368705024],
+    "sample_size": 4096,
+    "sample_results": [
+      {"region": "beginning", "offset": 0, "sample_size": 4096, "matches_expected_pattern": true},
+      {"region": "middle", "offset": 2684352512, "sample_size": 4096, "matches_expected_pattern": true},
+      {"region": "end", "offset": 5368705024, "sample_size": 4096, "matches_expected_pattern": true}
+    ],
+    "known_test_data_accessible": false,
+    "consistent_with_zero_overwrite": true
+  },
+  "limitations": [
+    "MOCK FIXTURE: no physical drive was tested.",
+    "Logical-interface samples do not prove every physical magnetic sector independently."
+  ],
+  "conclusion": "PASS",
+  "conclusion_statement": "Known test data is no longer accessible through the logical block interface and sampled regions match the expected overwrite pattern."
+}

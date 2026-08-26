@@ -1,0 +1,16 @@
+{
+  "validation_mode": "virtualbox_system_disk",
+  "allowed_target_identity": {
+    "device_type": "HDD",
+    "model": "VBOX HARDDISK",
+    "serial_number": "VBd5a89b2f-1feeb206",
+    "size_bytes": 26843545600
+  },
+  "evidence_disk_identity": {
+    "device_type": "HDD",
+    "model": "VBOX HARDDISK",
+    "serial_number": "VB07a438d4-9226a0ff",
+    "size_bytes": 5368709120
+  },
+  "destructive_test_enabled": false
+}

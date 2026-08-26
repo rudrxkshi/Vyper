@@ -1,0 +1,375 @@
+{
+   "blockdevices": [
+      {
+         "name": "loop0",
+         "path": "/dev/loop0",
+         "type": "loop",
+         "size": 4096,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/bare/5"
+         ]
+      },{
+         "name": "loop1",
+         "path": "/dev/loop1",
+         "type": "loop",
+         "size": 218550272,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/brave/668"
+         ]
+      },{
+         "name": "loop2",
+         "path": "/dev/loop2",
+         "type": "loop",
+         "size": 218550272,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/brave/672"
+         ]
+      },{
+         "name": "loop3",
+         "path": "/dev/loop3",
+         "type": "loop",
+         "size": 77586432,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/core22/2437"
+         ]
+      },{
+         "name": "loop4",
+         "path": "/dev/loop4",
+         "type": "loop",
+         "size": 70049792,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/core24/1643"
+         ]
+      },{
+         "name": "loop5",
+         "path": "/dev/loop5",
+         "type": "loop",
+         "size": 70094848,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/core24/1587"
+         ]
+      },{
+         "name": "loop6",
+         "path": "/dev/loop6",
+         "type": "loop",
+         "size": 20930560,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/desktop-security-center/151"
+         ]
+      },{
+         "name": "loop7",
+         "path": "/dev/loop7",
+         "type": "loop",
+         "size": 17301504,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/firmware-updater/226"
+         ]
+      },{
+         "name": "loop8",
+         "path": "/dev/loop8",
+         "type": "loop",
+         "size": 286994432,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/firefox/8107"
+         ]
+      },{
+         "name": "loop9",
+         "path": "/dev/loop9",
+         "type": "loop",
+         "size": 20602880,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/desktop-security-center/150"
+         ]
+      },{
+         "name": "loop10",
+         "path": "/dev/loop10",
+         "type": "loop",
+         "size": 557309952,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/gnome-42-2204/263"
+         ]
+      },{
+         "name": "loop11",
+         "path": "/dev/loop11",
+         "type": "loop",
+         "size": 635518976,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/gnome-46-2404/153"
+         ]
+      },{
+         "name": "loop12",
+         "path": "/dev/loop12",
+         "type": "loop",
+         "size": 96141312,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/gtk-common-themes/1535"
+         ]
+      },{
+         "name": "loop13",
+         "path": "/dev/loop13",
+         "type": "loop",
+         "size": 19746816,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/prompting-client/222"
+         ]
+      },{
+         "name": "loop14",
+         "path": "/dev/loop14",
+         "type": "loop",
+         "size": 414167040,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/mesa-2404/1165"
+         ]
+      },{
+         "name": "loop15",
+         "path": "/dev/loop15",
+         "type": "loop",
+         "size": 19738624,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/prompting-client/204"
+         ]
+      },{
+         "name": "loop16",
+         "path": "/dev/loop16",
+         "type": "loop",
+         "size": 593920,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/snapd-desktop-integration/361"
+         ]
+      },{
+         "name": "loop17",
+         "path": "/dev/loop17",
+         "type": "loop",
+         "size": 51654656,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/snapd/26865"
+         ]
+      },{
+         "name": "loop18",
+         "path": "/dev/loop18",
+         "type": "loop",
+         "size": 16449536,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/snap-store/1367"
+         ]
+      },{
+         "name": "loop19",
+         "path": "/dev/loop19",
+         "type": "loop",
+         "size": 847872,
+         "rota": true,
+         "model": null,
+         "serial": null,
+         "fstype": "squashfs",
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [
+             "/snap/snapd-desktop-integration/391"
+         ]
+      },{
+         "name": "sda",
+         "path": "/dev/sda",
+         "type": "disk",
+         "size": 26843545600,
+         "rota": true,
+         "model": "VBOX HARDDISK",
+         "serial": "VB374dbc03-ecfa2108",
+         "fstype": null,
+         "label": null,
+         "uuid": null,
+         "partuuid": null,
+         "mountpoints": [],
+         "children": [
+            {
+               "name": "sda1",
+               "path": "/dev/sda1",
+               "type": "part",
+               "size": 1048576,
+               "rota": true,
+               "model": null,
+               "serial": null,
+               "fstype": null,
+               "label": null,
+               "uuid": null,
+               "partuuid": "6ac32264-4783-4be8-a59b-a0d44d2e93e0",
+               "mountpoints": []
+            },{
+               "name": "sda2",
+               "path": "/dev/sda2",
+               "type": "part",
+               "size": 26840399872,
+               "rota": true,
+               "model": null,
+               "serial": null,
+               "fstype": "ext4",
+               "label": null,
+               "uuid": "e623c85f-8318-4641-b2be-35475e19d13e",
+               "partuuid": "8efa5f2d-81e5-40b0-8f45-7bcd7f430277",
+               "mountpoints": [
+                   "/"
+               ]
+            }
+         ]
+      },{
+         "name": "sdb",
+         "path": "/dev/sdb",
+         "type": "disk",
+         "size": 5368709120,
+         "rota": true,
+         "model": "VBOX HARDDISK",
+         "serial": "VBfd688823-1e732331",
+         "fstype": "ext4",
+         "label": "VYPER_EVIDENCE",
+         "uuid": "a61f689b-4131-4769-9c8c-86b30d830c68",
+         "partuuid": null,
+         "mountpoints": []
+      },{
+         "name": "sr0",
+         "path": "/dev/sr0",
+         "type": "rom",
+         "size": 53489664,
+         "rota": true,
+         "model": "VBOX CD-ROM",
+         "serial": "VB0-01f003f6",
+         "fstype": "iso9660",
+         "label": "VBox_GAs_7.2.14",
+         "uuid": "2026-07-17-16-42-02-69",
+         "partuuid": null,
+         "mountpoints": []
+      }
+   ]
+}

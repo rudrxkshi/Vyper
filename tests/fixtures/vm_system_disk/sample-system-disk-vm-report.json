@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "validation_kind": "system_disk_virtualbox",
+  "mock_fixture": true,
+  "host_virtualization": {
+    "virtualization_type": "oracle",
+    "system_vendor": "innotek GmbH",
+    "product_name": "VirtualBox",
+    "virtualbox_proven": true
+  },
+  "boot_job_id": "mock-boot-job-9d",
+  "local_job_id": "mock-boot-job-9d",
+  "central_job_id": null,
+  "agent_id": "mock-agent",
+  "boot_image_version": "1.0.0-rc1",
+  "boot_image_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "mode": "dry-run",
+  "selected_pathway": "HDD_OVERWRITE",
+  "result_preservation": "RETAINED_OFFLINE",
+  "workflow_validation": "PASS",
+  "sanitization_validation": "NOT_EXECUTED",
+  "final_conclusion": "PASS",
+  "conclusion_statement": "boot workflow validation passed; disk sanitization was not executed"
+}

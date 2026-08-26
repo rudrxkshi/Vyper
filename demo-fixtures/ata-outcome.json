@@ -1,0 +1,1 @@
+{"fixture":true,"job_id":"demo-ata-job","method":"ATA_ERASE","final_status":"VERIFIED","verification":{"status":"VERIFIED","security_enabled":false,"security_frozen":false},"limitations":["Controller-reported state does not prove every NAND cell was overwritten."]}

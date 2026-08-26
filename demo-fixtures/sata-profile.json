@@ -1,0 +1,1 @@
+{"fixture":true,"device":"/dev/demo-sata","model":"VYPER DEMO SATA SSD","serial_number":"DEMO-SATA-001","size_bytes":1073741824,"rotational":false,"interface":"ATA","ata_secure_erase_supported":true,"ata_frozen":false,"system_disk":false,"mounted":false}
