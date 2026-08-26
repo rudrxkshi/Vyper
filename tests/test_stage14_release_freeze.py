@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import io
 import json
 import tomllib
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import HTTPException
 from sqlalchemy import create_engine, text
+from sqlalchemy.dialects import postgresql
 
 from agent.certificate import CertificateBuilder, verify_certificate_integrity
 from agent.evidence import EvidenceRecord
@@ -15,6 +20,10 @@ from backend.app.main import SUPPORTED_ALEMBIC_HEAD, require_supported_schema
 from local_agent.boot_sanitize import BOOT_ENVIRONMENT_VERSION, BOOT_JOB_VERSION, BootIntegrityError, BootJobStore
 from local_agent.main import API_VERSION
 from local_agent.privileged_executor import ExecutorProtocolError, validate_request
+from migrations import version_table
+from migrations.version_table import (
+	VERSION_NUM_LENGTH, VyperPostgresqlImpl, ensure_postgresql_version_table_compatibility,
+)
 from vyper_version import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,9 +43,88 @@ def test_release_version_is_consistent_everywhere():
 
 def test_frozen_protocol_and_migration_versions():
 	assert API_VERSION == "2" and BOOT_JOB_VERSION == "1"
-	assert SUPPORTED_ALEMBIC_HEAD == "0003_central_certificates"
+	assert SUPPORTED_ALEMBIC_HEAD == "0009_merge_migration_heads"
 	migrations = sorted(path.stem for path in (ROOT / "migrations/versions").glob("*.py") if not path.name.startswith("__"))
-	assert migrations == ["0001_stage6_baseline", "0002_stage13_mfa_sessions", "0003_central_certificates"]
+	assert migrations == [
+		"0001_stage6_baseline", "0002_stage13_mfa_sessions", "0003_central_certificates",
+		"0003_remote_command_identity", "0004_organization_policy_approvals",
+		"0005_organization_memberships", "0006_organization_event_scope",
+		"0007_remote_policy_lifecycle", "0008_organization_membership_lifecycle",
+		"0009_merge_migration_heads",
+	]
+
+
+def test_alembic_graph_is_complete_unique_reachable_and_has_supported_single_head():
+	config = Config(str(ROOT / "alembic.ini"))
+	script = ScriptDirectory.from_config(config)
+	revisions = list(script.walk_revisions())
+	by_id = {revision.revision: revision for revision in revisions}
+	assert len(by_id) == len(revisions)
+	for revision in revisions:
+		parents = revision.down_revision or ()
+		if isinstance(parents, str):
+			parents = (parents,)
+		assert set(parents) <= set(by_id)
+	heads = tuple(script.get_heads())
+	assert heads == (SUPPORTED_ALEMBIC_HEAD,)
+	reachable: set[str] = set()
+	pending = list(heads)
+	while pending:
+		revision_id = pending.pop()
+		if revision_id in reachable:
+			continue
+		reachable.add(revision_id)
+		parents = by_id[revision_id].down_revision or ()
+		pending.extend((parents,) if isinstance(parents, str) else parents)
+	assert reachable == set(by_id)
+
+
+def test_postgresql_version_table_supports_every_frozen_revision_id():
+	config = Config(str(ROOT / "alembic.ini"))
+	revisions = list(ScriptDirectory.from_config(config).walk_revisions())
+	maximum_revision_length = max(len(revision.revision) for revision in revisions)
+	implementation = VyperPostgresqlImpl(postgresql.dialect(), None, True, None, None, {})
+	table = implementation.version_table_impl(
+		version_table="alembic_version", version_table_schema=None, version_table_pk=True,
+	)
+	assert maximum_revision_length == len("0008_organization_membership_lifecycle")
+	assert table.c.version_num.type.length == VERSION_NUM_LENGTH
+	assert VERSION_NUM_LENGTH >= maximum_revision_length
+
+
+def test_offline_postgresql_migration_sql_creates_wide_version_table():
+	output = io.StringIO()
+	config = Config(str(ROOT / "alembic.ini"), output_buffer=output)
+	config.set_main_option("sqlalchemy.url", "postgresql://unused/test")
+	# Later historical migrations use live schema inspection and therefore do not
+	# support Alembic's offline mode; the baseline is sufficient to exercise the
+	# version-table creation performed before the first revision is stamped.
+	command.upgrade(config, "0001_stage6_baseline", sql=True)
+	generated_sql = output.getvalue()
+	assert "CREATE TABLE alembic_version" in generated_sql
+	assert "version_num VARCHAR(64) NOT NULL" in generated_sql
+
+
+def test_existing_postgresql_version_table_is_widened_before_migrations(monkeypatch):
+	class InspectorStub:
+		def get_table_names(self, schema=None):
+			return ["alembic_version"]
+		def get_columns(self, table_name, schema=None):
+			return [{"name": "version_num", "type": type("Varchar", (), {"length": 32})()}]
+
+	class ConnectionStub:
+		dialect = postgresql.dialect()
+		def __init__(self):
+			self.statements = []
+		def exec_driver_sql(self, statement):
+			self.statements.append(statement)
+
+	connection = ConnectionStub()
+	monkeypatch.setattr(version_table, "inspect", lambda unused: InspectorStub())
+	ensure_postgresql_version_table_compatibility(connection)
+	assert connection.statements == [
+		"ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)"
+	]
 
 
 def test_production_schema_gate_requires_exact_alembic_head(tmp_path):

@@ -331,3 +331,7 @@ def test_runtime_sqlite_artifacts_are_ignored_and_not_tracked():
 		cwd=ROOT, check=True, capture_output=True, text=True,
 	).stdout.splitlines()
 	assert tracked == []
+	tracked_bytecode = subprocess.run(
+		["git", "ls-files", "--", "*.pyc"], cwd=ROOT, check=True, capture_output=True, text=True,
+	).stdout.splitlines()
+	assert tracked_bytecode == []

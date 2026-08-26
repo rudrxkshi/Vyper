@@ -15,7 +15,10 @@ from fastapi.testclient import TestClient
 
 from agent.command_runner import CommandResult
 from backend.app.main import create_app
-from backend.app.models import AgentAssetRecord, AgentRecord, OperatorSessionRecord, UserRecord
+from backend.app.models import (
+	AgentAssetRecord, AgentRecord, OperatorSessionRecord, OrganizationMembershipRecord,
+	OrganizationRecord, UserRecord,
+)
 from backend.app.security import decrypt_mfa_secret, hash_password, token_digest, totp_code
 from local_agent.cli import verify_package
 from local_agent.privileged_executor import ExecutorProtocolError, MAX_REQUEST_BYTES, PrivilegedExecutor, validate_request
@@ -77,16 +80,20 @@ def test_password_only_session_cannot_create_destructive_central_job(tmp_path, m
 	monkeypatch.setenv("VYPER_DEV_ANONYMOUS_OPERATOR", "false")
 	app = create_app(database_url=f"sqlite:///{tmp_path / 'mfa-job.db'}")
 	with TestClient(app) as client:
-		_user(app); now = datetime.now(timezone.utc)
+		user_id = _user(app); now = datetime.now(timezone.utc)
 		with app.state.session_factory() as db:
+			organization = OrganizationRecord(id=str(uuid4()), name="Stage 13 organization")
+			membership = OrganizationMembershipRecord(
+				id=str(uuid4()), organization_id=organization.id, user_id=user_id, role="MEMBER",
+			)
 			agent = AgentRecord(agent_id=str(uuid4()), display_name="a", hostname="h", platform="linux", architecture="x86_64",
 				agent_version="1", api_version="2", agent_protocol_version="1", status="ONLINE", enrolled_at=now,
-				metadata_json={}, token_hash="a" * 64)
+				metadata_json={}, token_hash="a" * 64, organization_id=organization.id)
 			asset = AgentAssetRecord(id=str(uuid4()), agent_id=agent.agent_id, hardware_identity="b" * 64,
 				device_path="/dev/mock", device_type="HDD", identity_confidence="HIGH",
 				profile_json={"is_system_device": False, "mounted": False, "eligible_for_sanitization": True}, observations_json=[],
 				first_seen_at=now, last_seen_at=now)
-			db.add_all([agent, asset]); db.commit(); agent_id, asset_id = agent.agent_id, asset.id
+			db.add_all([organization, membership, agent, asset]); db.commit(); agent_id, asset_id = agent.agent_id, asset.id
 		client.post("/auth/login", json={"username": "operator", "password": "Correct-Horse-42!"})
 		response = client.post(f"/agents/{agent_id}/jobs", json={"asset_id": asset_id, "dry_run": False,
 			"central_authorized": True, "destructive_confirmation": "SANITIZE", "idempotency_key": "stage13-mfa"})

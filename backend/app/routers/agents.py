@@ -25,7 +25,7 @@ from ..auth import OperatorPrincipal, OperatorRole, organization_ids, require_or
 from ..command_signing import command_public_key_id, command_public_key_pem, sign_command
 from ..db import get_db
 from ..models import (
-	AgentAssetRecord, AgentRecord, CentralJobApprovalRecord, CentralJobEventRecord, CentralJobRecord,
+	AgentAssetRecord, AgentRecord, CentralCertificateRecord, CentralJobApprovalRecord, CentralJobEventRecord, CentralJobRecord,
 	EnrollmentTokenRecord, OrganizationMembershipRecord, OrganizationRecord, RemotePolicyRecord, UserRecord,
 )
 from ..schemas import (
@@ -657,7 +657,9 @@ def approve_central_job(central_job_id: str, payload: CentralJobApprovalDecision
 	if job is None:
 		raise HTTPException(status_code=404, detail="Central job not found.")
 	require_organization_access(db, principal, job.organization_id)
-	if job.expires_at <= utc_now():
+	now = utc_now()
+	expires_at = job.expires_at.replace(tzinfo=job.expires_at.tzinfo or now.tzinfo)
+	if expires_at <= now:
 		job.status = "EXPIRED"
 		job.final_status = "EXPIRED"
 		job.updated_at = utc_now()
