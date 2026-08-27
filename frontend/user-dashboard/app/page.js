@@ -173,6 +173,8 @@ export default function VyperDashboard() {
   const [mfaCode, setMfaCode] = useState("");
   const [debugPassword, setDebugPassword] = useState("");
   const [debugPasswordMsg, setDebugPasswordMsg] = useState("");
+  const [requireLocalApproval, setRequireLocalApproval] = useState(true);
+  const [remotePasswordInput, setRemotePasswordInput] = useState("");
 
   const apiClient = useMemo(
     () => createApiClient({
@@ -381,7 +383,7 @@ export default function VyperDashboard() {
       return;
     }
 
-    if (!form.dryRun && !form.authorized) {
+    if (requireLocalApproval && !form.dryRun && !form.authorized) {
       setFormError(
         "Check the authorization box or enable dry run before submitting."
       );
@@ -468,22 +470,38 @@ export default function VyperDashboard() {
       setRemoteJobError("Choose an enrolled agent and synchronized asset.");
       return;
     }
+    let isAuthorized = remoteJobForm.authorized;
     if (!remoteJobForm.dryRun && !remoteJobForm.authorized) {
-      setRemoteJobError("Central destructive authorization is required. Local approval will still be required separately.");
-      return;
+      if (!remotePasswordInput.trim()) {
+        setRemoteJobError("Either enable central authorization or enter your password to confirm this destructive operation.");
+        return;
+      }
+      try {
+        if (operatorUser && operatorUser.username) {
+          await apiClient.login(operatorUser.username, remotePasswordInput);
+          isAuthorized = true;
+        } else {
+          setRemoteJobError("No active operator session found to verify password.");
+          return;
+        }
+      } catch (error) {
+        setRemoteJobError("Password verification failed: " + formatApiError(error));
+        return;
+      }
     }
     setRemoteJobError("");
     try {
       await apiClient.createCentralJob(selectedAgentId, {
         asset_id: remoteJobForm.assetId,
         dry_run: remoteJobForm.dryRun,
-        central_authorized: remoteJobForm.authorized,
+        central_authorized: isAuthorized,
         destructive_confirmation: remoteJobForm.dryRun ? null : "SANITIZE",
         idempotency_key: newDashboardIdempotencyKey(),
         expires_in_seconds: 3600,
         execution_mode: remoteJobForm.executionMode,
         policy_id: selectedRemotePolicy?.id || null,
       });
+      setRemotePasswordInput("");
       await refreshDashboardData();
     } catch (error) {
       setRemoteJobError(formatApiError(error));
@@ -750,6 +768,12 @@ export default function VyperDashboard() {
                     {remoteJobForm.executionMode === "boot_sanitize" && <div className="nb-callout"><b>No-USB boot workflow.</b> The installed OS only prepares a one-shot boot. Sanitization requires fresh confirmation in the independent boot environment.</div>}
                     <div className="nb-check"><input type="checkbox" checked={remoteJobForm.dryRun} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, dryRun: event.target.checked, authorized: event.target.checked ? false : remoteJobForm.authorized })} /><div>Dry run. The agent may execute this automatically if locally configured.</div></div>
                     {!remoteJobForm.dryRun && <div className="nb-check" style={{ marginTop: 8 }}><input type="checkbox" checked={remoteJobForm.authorized} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, authorized: event.target.checked })} /><div><b>Central authorization.</b> This does not replace local operator approval.</div></div>}
+                    {!remoteJobForm.dryRun && !remoteJobForm.authorized && (
+                      <div className="nb-field" style={{ marginTop: 8 }}>
+                        <label>Password confirmation <span className="nb-hint">required when central authorization is not checked</span></label>
+                        <input type="password" placeholder="Enter password to confirm" value={remotePasswordInput} onChange={(event) => setRemotePasswordInput(event.target.value)} />
+                      </div>
+                    )}
                     {remoteJobError && <div className="nb-error">{remoteJobError}</div>}
                     <div className="nb-btn-row"><button className="nb-btn primary" disabled={!selectedRemoteAssetIsSelectable}>Queue remote job</button></div>
                   </form>
@@ -1049,12 +1073,20 @@ export default function VyperDashboard() {
                       </div>
                     </div>
                     <div className="nb-field" style={{ marginBottom: 8 }}>
-                      <div className="nb-check">
-                        <input type="checkbox" checked={form.authorized} onChange={(e) => setForm({ ...form, authorized: e.target.checked, ataPassword: e.target.checked ? form.ataPassword : "" })} />
-                        <div><b>I authorize this destructive operation.</b> Required before submission unless dry run is checked.</div>
+                      <div className="nb-check" style={{ background: requireLocalApproval ? "#FCFBF6" : "#F0EDE2", borderColor: requireLocalApproval ? "var(--ink)" : "var(--pend-line)" }}>
+                        <input type="checkbox" checked={requireLocalApproval} onChange={(e) => setRequireLocalApproval(e.target.checked)} />
+                        <div><b>Require local approval.</b> When enabled, the authorization box below must be checked before destructive submission. Toggle off for demo/dev workflows.</div>
                       </div>
                     </div>
-                    {!form.dryRun && form.authorized && (
+                    {requireLocalApproval && (
+                      <div className="nb-field" style={{ marginBottom: 8 }}>
+                        <div className="nb-check">
+                          <input type="checkbox" checked={form.authorized} onChange={(e) => setForm({ ...form, authorized: e.target.checked, ataPassword: e.target.checked ? form.ataPassword : "" })} />
+                          <div><b>I authorize this destructive operation.</b> Required before submission unless dry run is checked.</div>
+                        </div>
+                      </div>
+                    )}
+                    {!form.dryRun && (requireLocalApproval ? form.authorized : true) && (
                       <div className="nb-field">
                         <label>ATA password <span className="nb-hint">optional; used only if ATA secure erase is selected</span></label>
                         <input type="password" autoComplete="off" placeholder="Transient ATA password" value={form.ataPassword} onChange={(e) => setForm({ ...form, ataPassword: e.target.value })} />
