@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..auth import OperatorPrincipal, OperatorRole, require_api_key, require_roles
 from ..db import get_db
 from ..models import LoginAttemptRecord, OperatorSessionRecord, UserRecord
-from ..schemas import LoginRequest, MFACodeRequest, MFAEnrollRequest, UserCreate, UserRead, UserUpdate
+from ..schemas import DebugPasswordChangeRequest, LoginRequest, MFACodeRequest, MFAEnrollRequest, UserCreate, UserRead, UserUpdate
 from ..security import (
 	decrypt_mfa_secret, encrypt_mfa_secret, hash_password, new_totp_secret, production_mode,
 	record_audit_event, token_digest, verify_password, verify_totp,
@@ -148,6 +148,25 @@ def verify_mfa(payload: MFACodeRequest, request: Request, response: Response,
 	if user is None or not user.mfa_enabled:
 		raise HTTPException(status_code=409, detail="MFA is not enabled.")
 	return _complete_mfa(payload.code, request, response, principal, db, enable=False)
+
+
+@router.post("/auth/debug/password")
+def change_debug_password(payload: DebugPasswordChangeRequest, request: Request,
+	principal: OperatorPrincipal = Depends(require_api_key), db: Session = Depends(get_db)):
+	if production_mode():
+		raise HTTPException(status_code=404, detail="Not found.")
+	user = db.get(UserRecord, principal.user_id) if principal.user_id else None
+	if user is None:
+		raise HTTPException(status_code=409, detail="A real operator user session is required.")
+	try:
+		user.password_hash = hash_password(payload.password)
+	except ValueError as exc:
+		raise HTTPException(status_code=422, detail=str(exc)) from exc
+	user.password_changed_at = _now()
+	record_audit_event(db, actor=principal.audit_identity, action="DEBUG_PASSWORD_CHANGED", resource=f"user:{user.username}",
+		request_id=getattr(request.state, "request_id", None))
+	db.commit()
+	return {"changed": True}
 
 
 @router.get("/users", response_model=list[UserRead])

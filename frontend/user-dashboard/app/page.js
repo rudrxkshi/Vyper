@@ -171,6 +171,8 @@ export default function VyperDashboard() {
   const [loginError, setLoginError] = useState("");
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
+  const [debugPassword, setDebugPassword] = useState("");
+  const [debugPasswordMsg, setDebugPasswordMsg] = useState("");
 
   const apiClient = useMemo(
     () => createApiClient({
@@ -533,6 +535,18 @@ export default function VyperDashboard() {
     window.setTimeout(() => setSavedMsg(""), 2200);
   }
 
+  async function changeDebugPassword() {
+    setDebugPasswordMsg("");
+    try {
+      await apiClient.changePassword(debugPassword);
+      setDebugPassword("");
+      setDebugPasswordMsg("Changed.");
+      window.setTimeout(() => setDebugPasswordMsg(""), 2200);
+    } catch (error) {
+      setDebugPasswordMsg(formatApiError(error));
+    }
+  }
+
   async function submitLogin(event) {
     event.preventDefault();
     setLoginError("");
@@ -887,7 +901,7 @@ export default function VyperDashboard() {
                       <b>Authorization context.</b> Target <span className="nb-mono">{selectedRemoteAsset.device_path}</span>; identity <span className="nb-mono">{selectedRemoteAsset.hardware_identity}</span>; agent {selectedRemoteAgent.status}, last heartbeat {selectedRemoteAgent.last_seen_at || "never"}; policy {selectedRemotePolicy?.name || "default"}; eligibility {String(selectedRemoteAsset.profile_json?.eligible_for_sanitization)}; mounted {String(selectedRemoteAsset.profile_json?.mounted)}. Destructive execution is irreversible and still requires independent local approval.
                     </div>}
                     {remoteJobForm.executionMode === "boot_sanitize" && <div className="nb-callout"><b>No-USB boot workflow.</b> The installed OS only prepares a one-shot boot. Sanitization requires fresh confirmation in the independent boot environment.</div>}
-                    <div className="nb-check"><input type="checkbox" checked={remoteJobForm.dryRun} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, dryRun: event.target.checked })} /><div>Dry run. The agent may execute this automatically if locally configured.</div></div>
+                    <div className="nb-check"><input type="checkbox" checked={remoteJobForm.dryRun} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, dryRun: event.target.checked, authorized: event.target.checked ? false : remoteJobForm.authorized })} /><div>Dry run. The agent may execute this automatically if locally configured.</div></div>
                     {!remoteJobForm.dryRun && <div className="nb-check" style={{ marginTop: 8 }}><input type="checkbox" checked={remoteJobForm.authorized} onChange={(event) => setRemoteJobForm({ ...remoteJobForm, authorized: event.target.checked })} /><div><b>Central authorization.</b> This does not replace local operator approval.</div></div>}
                     {remoteJobError && <div className="nb-error">{remoteJobError}</div>}
                     <div className="nb-btn-row"><button className="nb-btn primary" disabled={!selectedRemoteAssetIsSelectable}>Queue remote job</button></div>
@@ -1181,22 +1195,24 @@ export default function VyperDashboard() {
                         </div>
                       )}
                     </div>
-                    <div className="nb-field">
-                      <label>ATA password <span className="nb-hint">only applies to ATA secure erase</span></label>
-                      <input type="password" placeholder="Optional" value={form.ataPassword} onChange={(e) => setForm({ ...form, ataPassword: e.target.value })} />
-                    </div>
                     <div className="nb-field" style={{ marginBottom: 12 }}>
                       <div className="nb-check">
-                        <input type="checkbox" checked={form.dryRun} onChange={(e) => setForm({ ...form, dryRun: e.target.checked })} />
+                        <input type="checkbox" checked={form.dryRun} onChange={(e) => setForm({ ...form, dryRun: e.target.checked, authorized: e.target.checked ? false : form.authorized, ataPassword: e.target.checked ? "" : form.ataPassword })} />
                         <div>Dry run — plan only, no destructive action is taken.</div>
                       </div>
                     </div>
                     <div className="nb-field" style={{ marginBottom: 8 }}>
                       <div className="nb-check">
-                        <input type="checkbox" checked={form.authorized} onChange={(e) => setForm({ ...form, authorized: e.target.checked })} />
+                        <input type="checkbox" checked={form.authorized} onChange={(e) => setForm({ ...form, authorized: e.target.checked, ataPassword: e.target.checked ? form.ataPassword : "" })} />
                         <div><b>I authorize this destructive operation.</b> Required before submission unless dry run is checked.</div>
                       </div>
                     </div>
+                    {!form.dryRun && form.authorized && (
+                      <div className="nb-field">
+                        <label>ATA password <span className="nb-hint">optional; used only if ATA secure erase is selected</span></label>
+                        <input type="password" autoComplete="off" placeholder="Transient ATA password" value={form.ataPassword} onChange={(e) => setForm({ ...form, ataPassword: e.target.value })} />
+                      </div>
+                    )}
                     {formError && <div className="nb-error">{formError}</div>}
                     <div className="nb-btn-row">
                       <button type="submit" className="nb-btn primary" disabled={!form.dryRun && selectedTargetProtection.blocked}>Submit job</button>
@@ -1457,6 +1473,18 @@ export default function VyperDashboard() {
                   {savedMsg && <Badge tone="ok">{savedMsg}</Badge>}
                 </div>
               </div>
+              {!localMode && (
+                <div className="nb-card" style={{ maxWidth: 460, marginTop: 12 }}>
+                  <div className="nb-field">
+                    <label>Change password</label>
+                    <input type="password" autoComplete="new-password" value={debugPassword} onChange={(e) => setDebugPassword(e.target.value)} />
+                  </div>
+                  <div className="nb-btn-row">
+                    <button className="nb-btn primary" type="button" onClick={changeDebugPassword}>Change</button>
+                    {debugPasswordMsg && <Badge tone={debugPasswordMsg === "Changed." ? "ok" : "bad"}>{debugPasswordMsg}</Badge>}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </main>

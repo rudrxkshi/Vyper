@@ -106,6 +106,18 @@ test("empty ATA password is represented as null", () => {
   );
 });
 
+test("ATA password is only sent while destructive approval is enabled", () => {
+  assert.deepEqual(buildSanitizeRequest({
+    target: "/dev/sdz",
+    ataPassword: "stale-password",
+    dryRun: false,
+    authorized: false,
+  }).authorization, {
+    approved: false,
+    ata_password: null,
+  });
+});
+
 test("VERIFIED is the successful final status", () => {
   const status = getFinalStatusMeta("VERIFIED");
   assert.equal(status.successful, true);
@@ -492,11 +504,13 @@ test("central security policy and approval APIs preserve scoped contracts", asyn
   await client.listPolicies("organization/one");
   await client.listSecurityEvents();
   await client.decideCentralJob("central/job", "APPROVED");
+  await client.changePassword("NewTestPassword123!");
   assert.deepEqual(requests, [
     { url: "https://central.example/organizations", method: "GET", body: null },
     { url: "https://central.example/organizations/organization%2Fone/policies", method: "GET", body: null },
     { url: "https://central.example/security-events", method: "GET", body: null },
     { url: "https://central.example/central-jobs/central%2Fjob/approvals", method: "POST", body: { decision: "APPROVED" } },
+    { url: "https://central.example/auth/debug/password", method: "POST", body: { password: "NewTestPassword123!" } },
   ]);
 });
 
@@ -509,6 +523,7 @@ test("central dashboard wires MFA policy security and approval workflows", () =>
   assert.match(source, /screen === "security-events"/);
   assert.match(source, /decideCentralJob\(job, "APPROVED"\)/);
   assert.match(source, /last heartbeat/);
+  assert.match(source, /changeDebugPassword/);
 });
 
 test("agent and central job normalization preserve remote lifecycle state", () => {

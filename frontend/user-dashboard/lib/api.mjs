@@ -40,11 +40,12 @@ export function getDashboardMode() {
 }
 
 export function buildSanitizeRequest(form) {
-  const password = String(form?.ataPassword ?? "").trim();
+  const approved = Boolean(form?.authorized);
+  const password = approved ? String(form?.ataPassword ?? "").trim() : "";
   return {
     target: String(form?.target ?? ""),
     authorization: {
-      approved: Boolean(form?.authorized),
+      approved,
       ata_password: password || null,
     },
     dry_run: Boolean(form?.dryRun),
@@ -169,6 +170,7 @@ export function createApiClient({
       body: JSON.stringify({ username, password }),
     }),
     logout: () => request("/auth/logout", { method: "POST" }),
+    changePassword: (password) => request("/auth/debug/password", { method: "POST", body: JSON.stringify({ password }) }),
     enrollMfa: (password) => request("/auth/mfa/enroll", { method: "POST", body: JSON.stringify({ password }) }),
     confirmMfa: (code) => request("/auth/mfa/confirm", { method: "POST", body: JSON.stringify({ code }) }),
     verifyMfa: (code) => request("/auth/mfa/verify", { method: "POST", body: JSON.stringify({ code }) }),

@@ -108,6 +108,11 @@ class MFAEnrollRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class DebugPasswordChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=12, max_length=256)
+
+
 class UserCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(min_length=3, max_length=128, pattern=r"^[a-zA-Z0-9_.-]+$")
