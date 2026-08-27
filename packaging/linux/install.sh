@@ -18,9 +18,12 @@ if [ "$TEST_MODE" != "1" ]; then
   case "$(uname -m)" in x86_64|amd64) ;; *) fail "Stage 5 supports x86_64 only" ;; esac
   command -v python3 >/dev/null 2>&1 || fail "Python 3.11 or newer is required"
   python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)' || fail "Python 3.11 or newer is required"
-  for command in lsblk hdparm nvme smartctl systemctl mkinitramfs lsinitramfs grub-reboot grub-editenv update-grub swapoff findmnt pvs; do
+  for command in lsblk hdparm nvme smartctl systemctl mkinitramfs lsinitramfs grub-reboot grub-editenv update-grub swapoff findmnt pvs ldd; do
     command -v "$command" >/dev/null 2>&1 || fail "required command missing: $command"
   done
+  if ldd "$SCRIPT_DIR/payload/gui/vyper-gui" | grep -q 'not found'; then
+    fail "native GUI runtime dependency missing; install the reported WebKitGTK/GTK library and retry"
+  fi
 fi
 
 root_arg=${INSTALL_ROOT:-/}
@@ -49,6 +52,7 @@ if [ "$TEST_MODE" != "1" ]; then
   chmod 0640 "$etc/config.toml"
   if [ -f "$etc/agent-identity.json" ]; then chown vyper-agent:vyper-executor "$etc/agent-identity.json"; chmod 0600 "$etc/agent-identity.json"; fi
 	chown -R root:root "$opt"
+	chmod 0755 "$opt/gui/vyper-gui"
 	chown -R vyper-agent:vyper-executor "$state" "$logs"
   python3 -m venv "$opt/runtime"
   "$opt/runtime/bin/pip" install --disable-pip-version-check -r "$SCRIPT_DIR/payload/requirements.lock"
@@ -59,6 +63,7 @@ fi
 if [ "$TEST_MODE" != "1" ]; then
   systemctl daemon-reload
 	systemctl enable --now vyper-executor.service vyper-agent.service vyper-console.service
+	command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$INSTALL_ROOT/usr/share/applications" >/dev/null 2>&1 || true
 fi
 
-printf 'VYPER Local Console installed.\nNext: vyper enroll\nThen: vyper open\n'
+printf 'VYPER Local Console installed.\nNext: vyper enroll\nThen run vyper open as the desktop user, or launch VYPER Local Console from the application menu.\n'

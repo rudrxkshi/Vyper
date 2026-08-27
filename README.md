@@ -67,8 +67,9 @@ It binds to `127.0.0.1:8765` by default and exposes only:
 - `POST /remote-jobs/{central_job_id}/approve`
 
 Set `VYPER_LOCAL_AGENT_API_KEY` to require `X-VYPER-API-Key`. The default CORS
-origins include the packaged console at `http://127.0.0.1:8787` and
-`http://localhost:8787`, plus the development dashboard on port `3000`;
+origins include the exact Tauri application origins, the packaged console at
+`http://127.0.0.1:8787` and `http://localhost:8787`, and the development
+dashboard on port `3000`;
 override them with a comma-separated
 `VYPER_LOCAL_AGENT_CORS_ORIGINS`. Public binding is refused unless both
 `VYPER_LOCAL_AGENT_HOST` and `VYPER_LOCAL_AGENT_ALLOW_PUBLIC=true` are set
@@ -118,7 +119,8 @@ does not open an inbound control channel to the local machine.
 
 The release build produces `release/vyper-local-console-linux-x86_64-1.0.0-rc1.tar.gz` for
 Ubuntu/Debian x86_64. It contains the Python wheel, pinned runtime dependency
-lock, static Next.js export, systemd units, installer, conservative uninstaller,
+lock, static Next.js export, native Tauri GUI, desktop launcher, systemd units,
+installer, conservative uninstaller,
 payload checksums, and package manifest.
 
 ```bash
@@ -127,6 +129,11 @@ sudo ./install.sh
 sudo vyper enroll
 vyper open
 ```
+
+`vyper open` prefers the installed native VYPER desktop window. The application
+menu entry provides the same launch path. If the GUI is unavailable, the command
+falls back to the loopback static console on port 8787. The GUI itself calls the
+existing local-agent API on `127.0.0.1:8765` and has no privileged command bridge.
 
 The unprivileged local agent starts automatically and binds to `127.0.0.1:8765`; only the allowlisted executor helper retains root storage access. The
 unprivileged static console binds to `127.0.0.1:8787`. Configuration lives in

@@ -10,6 +10,11 @@ serves a static production build on `127.0.0.1:8787`. Central synchronization
 is outbound-only. Central browser authorization and local privileged approval
 remain separate trust domains.
 
+The primary desktop experience is an ordinary-user Tauri process embedding the
+same static export. It can connect only to the loopback local API under the
+application CSP, exposes no Tauri command handler, refuses UID 0, and is not a
+system service. Closing it has no effect on the agent, executor, or active jobs.
+
 Configuration is mode `0640`. The agent credential is service-owned mode `0600`
 and never enters the UI bundle, browser local storage, logs, diagnostic output,
 or durable outbox. Private signing keys and the MFA encryption key remain

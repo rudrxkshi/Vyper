@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=VYPER Local Console
+Comment=Evidence-driven secure storage sanitization console
+Exec=/usr/bin/vyper-gui
+Icon=/opt/vyper/gui/vyper.svg
+Terminal=false
+Categories=System;Utility;
+StartupNotify=true
+StartupWMClass=VYPER Local Console

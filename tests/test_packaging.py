@@ -16,7 +16,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
-from local_agent.config import LocalConfig, load_config, write_config
+from local_agent.config import LocalConfig, apply_runtime_environment, load_config, write_config
 from local_agent import cli
 from local_agent.diagnostics import collect_diagnostics
 from local_agent.storage import LocalJobStore
@@ -46,12 +46,16 @@ def _load_build_release():
 def _package_fixture(tmp_path: Path, version: str = "1.0.0-rc1", name: str = "package") -> Path:
 	package = tmp_path / name
 	(package / "payload" / "ui").mkdir(parents=True)
+	(package / "payload" / "gui").mkdir()
 	(package / "payload" / "systemd").mkdir()
 	shutil.copytree(ROOT / "packaging" / "boot", package / "payload" / "boot")
 	shutil.copytree(ROOT / "docs", package / "payload" / "docs")
 	(package / "manifest.json").write_text(json.dumps({"version": version}), encoding="utf-8")
 	(package / "payload" / "VERSION").write_text(version + "\n", encoding="utf-8")
 	(package / "payload" / "ui" / "index.html").write_text("VYPER", encoding="utf-8")
+	(package / "payload" / "gui" / "vyper-gui").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	for filename in ("vyper.desktop", "vyper.svg"):
+		(package / "payload" / "gui" / filename).write_bytes((ROOT / "packaging" / "linux" / "desktop" / filename).read_bytes())
 	for filename in ("config.toml",):
 		(package / "payload" / filename).write_bytes((ROOT / "packaging" / "linux" / filename).read_bytes())
 	for filename in ("vyper-executor.service", "vyper-agent.service", "vyper-console.service"):
@@ -94,8 +98,8 @@ def test_installer_creates_layout_and_secure_permissions(tmp_path):
 	package = _package_fixture(tmp_path)
 	rootfs = tmp_path / "rootfs"
 	installer.install_layout(package, rootfs, test_mode=True)
-	for relative in ("opt/vyper/ui", "opt/vyper/docs/SYSTEM_DISK_SANITIZATION.md", "etc/vyper/config.toml",
-		"var/lib/vyper", "var/log/vyper", "usr/bin/vyper"):
+	for relative in ("opt/vyper/ui", "opt/vyper/gui/vyper-gui", "opt/vyper/docs/SYSTEM_DISK_SANITIZATION.md", "etc/vyper/config.toml",
+		"var/lib/vyper", "var/log/vyper", "usr/bin/vyper", "usr/bin/vyper-gui", "usr/share/applications/vyper.desktop"):
 		assert (rootfs / relative).exists()
 	if os.name != "nt":
 		assert stat.S_IMODE((rootfs / "etc/vyper/config.toml").stat().st_mode) & 0o002 == 0
@@ -126,11 +130,16 @@ def test_same_version_reinstall_replaces_immutable_ui_and_python_package(tmp_pat
 	rootfs = tmp_path / "rootfs"
 	installer.install_layout(package, rootfs, test_mode=True)
 	ui = rootfs / "opt/vyper/ui"
+	gui = rootfs / "opt/vyper/gui"
 	(ui / "obsolete-chunk.js").write_text("stale", encoding="utf-8")
+	(gui / "obsolete-gui-resource").write_text("stale", encoding="utf-8")
 	(package / "payload/ui/index.html").write_text("VYPER updated", encoding="utf-8")
+	(package / "payload/gui/vyper-gui").write_text("updated GUI", encoding="utf-8")
 	installer.install_layout(package, rootfs, test_mode=True)
 	assert (ui / "index.html").read_text(encoding="utf-8") == "VYPER updated"
 	assert not (ui / "obsolete-chunk.js").exists()
+	assert (gui / "vyper-gui").read_text(encoding="utf-8") == "updated GUI"
+	assert not (gui / "obsolete-gui-resource").exists()
 	install_script = (ROOT / "packaging/linux/install.sh").read_text(encoding="utf-8")
 	assert "--force-reinstall --no-deps" in install_script
 
@@ -244,6 +253,81 @@ def test_systemd_units_enforce_loopback_unprivileged_ui_and_no_shell_service():
 	assert "User=vyper-ui" in console and "User=root" not in console
 	assert "/bin/sh" not in agent and "/bin/bash" not in agent
 	assert "vyper-local-agent" in agent and "NoNewPrivileges=yes" in agent
+
+
+def test_native_gui_is_unprivileged_narrow_and_has_a_desktop_launcher():
+	launcher = (ROOT / "packaging/linux/desktop/vyper.desktop").read_text(encoding="utf-8")
+	tauri = (ROOT / "frontend/user-dashboard/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+	rust = (ROOT / "frontend/user-dashboard/src-tauri/src/main.rs").read_text(encoding="utf-8")
+	assert "Exec=/usr/bin/vyper-gui" in launcher
+	assert "Terminal=false" in launcher
+	assert '"frontendDist": "../out"' in tauri
+	assert "http://127.0.0.1:8765" in tauri
+	assert '"minWidth": 960' in tauri and '"minHeight": 640' in tauri
+	assert "invoke_handler" not in rust and "systemctl" not in rust
+	assert "libc::geteuid()" in rust and "refuses to run as root" in rust
+	assert "User=root" not in launcher and "sudo" not in launcher
+	assert "systemctl" not in launcher
+
+
+def test_installed_runtime_allows_only_known_console_and_tauri_origins(monkeypatch):
+	monkeypatch.setenv("VYPER_LOCAL_AGENT_CORS_ORIGINS", "test-placeholder")
+	apply_runtime_environment(LocalConfig())
+	origins = set(os.environ["VYPER_LOCAL_AGENT_CORS_ORIGINS"].split(","))
+	assert {"tauri://localhost", "http://tauri.localhost", "http://127.0.0.1:8787"} <= origins
+	assert "*" not in origins
+
+
+def test_release_builder_stages_the_native_gui_payload(tmp_path):
+	builder = _load_build_release()
+	output = tmp_path / "release"
+	artifact = builder.build_release(output_dir=output, skip_builds=True, skip_frontend_build=True)
+	with tarfile.open(artifact, "r:gz") as archive:
+		names = archive.getnames()
+	assert any(name.endswith("/payload/gui/vyper-gui") for name in names)
+	assert any(name.endswith("/payload/gui/vyper.desktop") for name in names)
+	assert any(name.endswith("/payload/gui/vyper.svg") for name in names)
+	manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+	assert manifest["desktop_gui"] == {"enabled": True, "technology": "tauri", "port_8787_required": False}
+	source = (ROOT / "packaging/build_release.py").read_text(encoding="utf-8")
+	assert '"--features", "custom-protocol"' in source
+
+
+def test_vyper_open_prefers_gui_and_falls_back_to_loopback_browser(tmp_path, monkeypatch):
+	config_file = tmp_path / "config.toml"
+	write_config(LocalConfig(local_console_bind="127.0.0.1", local_console_port=8787), config_file)
+	monkeypatch.setenv("VYPER_CONFIG_PATH", str(config_file))
+	gui = tmp_path / "vyper-gui"
+	gui.write_text("fixture", encoding="utf-8")
+	os.chmod(gui, 0o755)
+	launches = []
+	browser_urls = []
+	assert cli._open_console(
+		gui_path=gui, effective_uid=1000,
+		popen=lambda argv, **kwargs: launches.append((argv, kwargs)),
+		browser_open=lambda url: browser_urls.append(url) or True,
+	) == 0
+	assert launches[0][0] == [str(gui)]
+	assert launches[0][1]["start_new_session"] is True
+	assert browser_urls == []
+	assert cli._open_console(
+		gui_path=tmp_path / "missing", effective_uid=1000,
+		browser_open=lambda url: browser_urls.append(url) or True,
+	) == 0
+	assert browser_urls == ["http://127.0.0.1:8787"]
+
+
+def test_vyper_gui_is_never_launched_as_root(tmp_path, monkeypatch, capsys):
+	config_file = tmp_path / "config.toml"
+	write_config(LocalConfig(), config_file)
+	monkeypatch.setenv("VYPER_CONFIG_PATH", str(config_file))
+	gui = tmp_path / "vyper-gui"
+	gui.write_text("fixture", encoding="utf-8")
+	os.chmod(gui, 0o755)
+	launches = []
+	assert cli._open_console(gui_path=gui, effective_uid=0, popen=lambda *args, **kwargs: launches.append(args)) == 2
+	assert launches == []
+	assert "Refusing to launch" in capsys.readouterr().err
 
 
 def test_diagnostics_redact_credentials_and_work_without_enrollment(tmp_path, monkeypatch):

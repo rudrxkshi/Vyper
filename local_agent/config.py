@@ -96,7 +96,13 @@ def apply_runtime_environment(config: LocalConfig | None = None) -> LocalConfig:
 		"VYPER_INVENTORY_INTERVAL": settings.inventory_interval,
 		"VYPER_SYNC_ENABLED": settings.sync_enabled,
 		"VYPER_LOG_LEVEL": settings.log_level,
-		"VYPER_LOCAL_AGENT_CORS_ORIGINS": f"http://{settings.local_console_bind}:{settings.local_console_port}",
+		"VYPER_LOCAL_AGENT_CORS_ORIGINS": ",".join((
+			"tauri://localhost",
+			"http://tauri.localhost",
+			f"http://{settings.local_console_bind}:{settings.local_console_port}",
+			"http://127.0.0.1:3000",
+			"http://localhost:3000",
+		)),
 	}
 	if settings.sync_enabled and settings.central_api_url:
 		mapping["VYPER_CENTRAL_URL"] = settings.central_api_url

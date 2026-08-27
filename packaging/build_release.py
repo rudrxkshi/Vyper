@@ -88,6 +88,31 @@ def verify_local_frontend_export(export_root: Path) -> Path:
 	return metadata
 
 
+def build_desktop_gui(frontend: Path, staging: Path, *, skip_builds: bool) -> Path:
+	destination = staging / "vyper-gui"
+	if skip_builds:
+		destination.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+		return destination
+	if sys.platform != "linux":
+		raise RuntimeError("The VYPER Linux desktop GUI release must be built on Linux x86_64.")
+	cargo = shutil.which("cargo")
+	if cargo is None:
+		raise RuntimeError("cargo is required to build the VYPER Tauri desktop GUI.")
+	target = staging / "tauri-target"
+	environment = os.environ.copy()
+	environment["CARGO_TARGET_DIR"] = str(target)
+	subprocess.run(
+		[cargo, "build", "--release", "--features", "custom-protocol",
+			"--manifest-path", str(frontend / "src-tauri" / "Cargo.toml")],
+		cwd=frontend, env=environment, check=True,
+	)
+	built = target / "release" / "vyper-gui"
+	if not built.is_file():
+		raise RuntimeError("Tauri completed without producing the expected vyper-gui binary.")
+	shutil.copy2(built, destination)
+	return destination
+
+
 def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_build: bool = False) -> Path:
 	output_dir.mkdir(parents=True, exist_ok=True)
 	from local_agent.sbom import generate_sbom
@@ -111,6 +136,7 @@ def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_
 	if any(temp.iterdir()):
 		raise RuntimeError(f"Build staging directory is not empty: {temp}")
 	try:
+		gui_binary = build_desktop_gui(frontend, temp, skip_builds=skip_builds)
 		wheel_dir = temp / "wheels"
 		wheel_dir.mkdir()
 		if not skip_builds:
@@ -134,6 +160,7 @@ def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_
 		package_root = temp / f"vyper-local-console-{__version__}"
 		payload = package_root / "payload"
 		(payload / "wheels").mkdir(parents=True)
+		(payload / "gui").mkdir(parents=True)
 		(payload / "trust").mkdir(parents=True)
 		for filename in ("install.sh", "uninstall.sh", "README.md"):
 			shutil.copy2(ROOT / "packaging" / "linux" / filename, package_root / filename)
@@ -142,6 +169,9 @@ def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_
 		shutil.copy2(ROOT / "requirements.lock", payload / "requirements.lock")
 		shutil.copy2(ROOT / "deploy/trusted-release-keys.json", payload / "trust/trusted-release-keys.json")
 		_copy_tree(ROOT / "packaging" / "linux" / "systemd", payload / "systemd")
+		shutil.copy2(gui_binary, payload / "gui" / "vyper-gui")
+		shutil.copy2(ROOT / "packaging" / "linux" / "desktop" / "vyper.desktop", payload / "gui" / "vyper.desktop")
+		shutil.copy2(ROOT / "packaging" / "linux" / "desktop" / "vyper.svg", payload / "gui" / "vyper.svg")
 		_copy_tree(ROOT / "packaging" / "boot", payload / "boot")
 		_copy_tree(ROOT / "docs", payload / "docs")
 		_copy_tree(ROOT / "demo-fixtures", payload / "demo-fixtures")
@@ -159,6 +189,7 @@ def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_
 			"architecture": "x86_64",
 			"agent_protocol_version": "1",
 			"local_api_version": "2",
+			"desktop_gui": {"enabled": True, "technology": "tauri", "port_8787_required": False},
 			"checksum_scope": "archive payload excluding manifest.json and checksums.txt",
 			"payload_sha256": payload_hash,
 			"payload_size_bytes": payload_size,
@@ -190,6 +221,7 @@ def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_
 		"download_url": f"/downloads/{artifact.name}",
 		"minimum_agent_protocol": "1",
 		"minimum_local_api_version": "2",
+		"desktop_gui": {"enabled": True, "technology": "tauri", "port_8787_required": False},
 		"signature_status": "UNSIGNED",
 		"integrity_status": "CHECKSUM_ONLY",
 		"signature_type": None,

@@ -9,9 +9,11 @@ sudo vyper enroll
 vyper open
 ```
 
-The agent API and web console bind to loopback. The agent runs as root because
-it performs tightly scoped storage operations; the static UI runs as the
-unprivileged `vyper-ui` account. No arbitrary command API is exposed.
+The application-menu launcher and `vyper open` start an unprivileged Tauri
+window containing the existing local dashboard. The agent API and compatibility
+web console remain bound to loopback. The unprivileged agent delegates tightly
+scoped storage operations to the separate root executor. The GUI has no command
+bridge or direct device access.
 
 Package integrity is protected by SHA-256 only. Package signing is a future
 production requirement.

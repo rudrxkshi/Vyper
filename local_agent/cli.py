@@ -20,6 +20,9 @@ from .config import load_config, write_config
 from .diagnostics import collect_diagnostics
 
 
+DEFAULT_GUI_PATH = Path("/opt/vyper/gui/vyper-gui")
+
+
 def _system_disk_service():
 	from agent.discovery import DeviceDiscovery
 	from .boot_handoff import GrubOneShotHandoff
@@ -101,6 +104,26 @@ def _wait_for_local_api(url: str, attempts: int = 20) -> bool:
 			pass
 		time.sleep(0.25)
 	return False
+
+
+def _open_console(*, gui_path: Path | None = None, popen=subprocess.Popen,
+	browser_open=webbrowser.open, effective_uid: int | None = None) -> int:
+	config = load_config()
+	gui = gui_path or Path(os.getenv("VYPER_GUI_PATH", str(DEFAULT_GUI_PATH)))
+	if gui.is_file() and os.access(gui, os.X_OK):
+		uid = effective_uid if effective_uid is not None else (os.geteuid() if hasattr(os, "geteuid") else 1)
+		if uid == 0:
+			print("Refusing to launch the VYPER desktop GUI as root. Run 'vyper open' as the desktop user.", file=sys.stderr)
+			return 2
+		try:
+			popen(
+				[str(gui)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+				close_fds=True, start_new_session=True,
+			)
+			return 0
+		except OSError as exc:
+			print(f"Native VYPER GUI unavailable ({type(exc).__name__}); opening the loopback console.", file=sys.stderr)
+	return 0 if browser_open(f"http://{config.local_console_bind}:{config.local_console_port}") else 1
 
 
 def enroll(args) -> int:
@@ -264,8 +287,7 @@ def main(argv: list[str] | None = None) -> int:
 		print(__version__)
 		return 0
 	if args.command == "open":
-		config = load_config()
-		return 0 if webbrowser.open(f"http://{config.local_console_bind}:{config.local_console_port}") else 1
+		return _open_console()
 	if args.command == "enroll":
 		return enroll(args)
 	if args.command == "verify-package":

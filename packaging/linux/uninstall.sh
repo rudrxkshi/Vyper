@@ -30,3 +30,6 @@ else
 fi
 
 if [ "$TEST_MODE" != "1" ]; then systemctl daemon-reload; fi
+if [ "$TEST_MODE" != "1" ] && command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$INSTALL_ROOT/usr/share/applications" >/dev/null 2>&1 || true
+fi

@@ -1,0 +1,17 @@
+[package]
+name = "vyper-gui"
+version = "1.0.0-rc1"
+description = "Native desktop shell for the VYPER Local Console"
+authors = ["VYPER"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+libc = "0.2"
+tauri = { version = "2", features = [] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

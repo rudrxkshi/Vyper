@@ -25,14 +25,19 @@ def install_layout(package_root: Path, root: Path, *, test_mode: bool = False) -
 	initramfs_hooks = _under(root, "/etc/initramfs-tools/hooks")
 	initramfs_scripts = _under(root, "/etc/initramfs-tools/scripts/local-premount")
 	bin_dir = _under(root, "/usr/bin")
+	applications = _under(root, "/usr/share/applications")
 	for path, mode in ((opt, 0o755), (config_dir, 0o750), (state, 0o700), (logs, 0o750), (units, 0o755),
-		(initramfs_hooks, 0o755), (initramfs_scripts, 0o755), (bin_dir, 0o755)):
+		(initramfs_hooks, 0o755), (initramfs_scripts, 0o755), (bin_dir, 0o755), (applications, 0o755)):
 		path.mkdir(parents=True, exist_ok=True)
 		os.chmod(path, mode)
 	ui = opt / "ui"
 	if ui.exists():
 		shutil.rmtree(ui)
 	ui.mkdir()
+	gui = opt / "gui"
+	if gui.exists():
+		shutil.rmtree(gui)
+	gui.mkdir()
 	(opt / "runtime").mkdir(exist_ok=True)
 	(opt / "boot").mkdir(exist_ok=True)
 	(opt / "docs").mkdir(exist_ok=True)
@@ -40,6 +45,12 @@ def install_layout(package_root: Path, root: Path, *, test_mode: bool = False) -
 	shutil.copy2(package_root / "manifest.json", opt / "manifest.json")
 	shutil.copy2(package_root / "payload" / "VERSION", opt / "VERSION")
 	shutil.copytree(package_root / "payload" / "ui", ui, dirs_exist_ok=True)
+	shutil.copy2(package_root / "payload" / "gui" / "vyper-gui", gui / "vyper-gui")
+	shutil.copy2(package_root / "payload" / "gui" / "vyper.svg", gui / "vyper.svg")
+	os.chmod(gui / "vyper-gui", 0o755)
+	os.chmod(gui / "vyper.svg", 0o644)
+	shutil.copy2(package_root / "payload" / "gui" / "vyper.desktop", applications / "vyper.desktop")
+	os.chmod(applications / "vyper.desktop", 0o644)
 	shutil.copytree(package_root / "payload" / "docs", opt / "docs", dirs_exist_ok=True)
 	if (package_root / "payload" / "trust").is_dir():
 		shutil.copytree(package_root / "payload" / "trust", opt / "trust", dirs_exist_ok=True)
@@ -70,12 +81,21 @@ def install_layout(package_root: Path, root: Path, *, test_mode: bool = False) -
 		wrapper = bin_dir / command
 		wrapper.write_text(f'#!/bin/sh\nexec /opt/vyper/runtime/bin/{command} "$@"\n', encoding="utf-8")
 		os.chmod(wrapper, 0o755)
+	gui_wrapper = bin_dir / "vyper-gui"
+	gui_wrapper.write_text(
+		'#!/bin/sh\n[ "$(id -u)" -ne 0 ] || { printf "VYPER Desktop GUI refuses to run as root.\\n" >&2; exit 2; }\n'
+		'exec /opt/vyper/gui/vyper-gui "$@"\n',
+		encoding="utf-8",
+	)
+	os.chmod(gui_wrapper, 0o755)
 
 
 def uninstall_layout(root: Path, *, purge: bool = False) -> None:
 	root = root.resolve()
 	for command in COMMANDS:
 		_under(root, f"/usr/bin/{command}").unlink(missing_ok=True)
+	_under(root, "/usr/bin/vyper-gui").unlink(missing_ok=True)
+	_under(root, "/usr/share/applications/vyper.desktop").unlink(missing_ok=True)
 	for unit in ("vyper-executor.service", "vyper-agent.service", "vyper-console.service"):
 		_under(root, f"/etc/systemd/system/{unit}").unlink(missing_ok=True)
 	_under(root, "/etc/initramfs-tools/hooks/vyper").unlink(missing_ok=True)

@@ -25,6 +25,7 @@ REQUIRED_SUFFIXES = (
 	"/payload/docs/KNOWN_LIMITATIONS.md", "/payload/docs/RELEASE_CANDIDATE_REPORT.md",
 	"/payload/ui/index.html",
 )
+DESKTOP_GUI_SUFFIXES = ("/payload/gui/vyper-gui", "/payload/gui/vyper.desktop", "/payload/gui/vyper.svg")
 
 
 def validate_release(release_directory: str | Path) -> dict[str, object]:
@@ -45,6 +46,10 @@ def validate_release(release_directory: str | Path) -> dict[str, object]:
 		for suffix in REQUIRED_SUFFIXES:
 			if not any(name.endswith(suffix) for name in names):
 				raise ValueError(f"Release archive is missing required content: {suffix}")
+		if (manifest.get("desktop_gui") or {}).get("enabled"):
+			for suffix in DESKTOP_GUI_SUFFIXES:
+				if not any(name.endswith(suffix) for name in names):
+					raise ValueError(f"Release archive is missing required desktop GUI content: {suffix}")
 		for member in members:
 			parts = set(Path(member.name).parts)
 			if parts & FORBIDDEN_PARTS or member.name.endswith(FORBIDDEN_SUFFIXES):
