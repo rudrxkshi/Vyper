@@ -88,6 +88,29 @@ def verify_local_frontend_export(export_root: Path) -> Path:
 	return metadata
 
 
+def desktop_gui_artifact_path(frontend: Path, cargo_target_dir: str | Path | None = None) -> Path:
+	if cargo_target_dir is None:
+		target = frontend / "src-tauri" / "target"
+	else:
+		target = Path(cargo_target_dir).expanduser()
+		if not target.is_absolute():
+			# Cargo resolves a relative CARGO_TARGET_DIR against the command cwd.
+			target = frontend / target
+	return target.resolve() / "release" / "vyper-gui"
+
+
+def validate_desktop_gui_artifact(path: Path) -> Path:
+	if not path.is_file():
+		raise RuntimeError(f"Tauri completed without producing the expected vyper-gui binary at {path}.")
+	if os.name != "nt" and not os.access(path, os.X_OK):
+		raise RuntimeError(f"Tauri GUI artifact is not executable: {path}")
+	with path.open("rb") as handle:
+		magic = handle.read(4)
+	if magic != b"\x7fELF":
+		raise RuntimeError(f"Tauri GUI artifact is not a Linux ELF executable: {path}")
+	return path
+
+
 def build_desktop_gui(frontend: Path, staging: Path, *, skip_builds: bool) -> Path:
 	destination = staging / "vyper-gui"
 	if skip_builds:
@@ -98,7 +121,9 @@ def build_desktop_gui(frontend: Path, staging: Path, *, skip_builds: bool) -> Pa
 	cargo = shutil.which("cargo")
 	if cargo is None:
 		raise RuntimeError("cargo is required to build the VYPER Tauri desktop GUI.")
-	target = staging / "tauri-target"
+	# Use an absolute target directory because Cargo resolves relative values
+	# against cwd (the frontend), while release staging is rooted at the caller.
+	target = (staging / "tauri-target").resolve()
 	environment = os.environ.copy()
 	environment["CARGO_TARGET_DIR"] = str(target)
 	subprocess.run(
@@ -106,11 +131,9 @@ def build_desktop_gui(frontend: Path, staging: Path, *, skip_builds: bool) -> Pa
 			"--manifest-path", str(frontend / "src-tauri" / "Cargo.toml")],
 		cwd=frontend, env=environment, check=True,
 	)
-	built = target / "release" / "vyper-gui"
-	if not built.is_file():
-		raise RuntimeError("Tauri completed without producing the expected vyper-gui binary.")
+	built = validate_desktop_gui_artifact(desktop_gui_artifact_path(frontend, environment["CARGO_TARGET_DIR"]))
 	shutil.copy2(built, destination)
-	return destination
+	return validate_desktop_gui_artifact(destination)
 
 
 def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_build: bool = False) -> Path:
