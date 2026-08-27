@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from html.parser import HTMLParser
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +23,56 @@ from vyper_version import __version__
 ARTIFACT_NAME = f"vyper-local-console-linux-x86_64-{__version__}.tar.gz"
 PRODUCT = "VYPER Local Console"
 LOCAL_FRONTEND_API = "http://127.0.0.1:8765"
+
+
+class _StaticAssetReferences(HTMLParser):
+	def __init__(self) -> None:
+		super().__init__()
+		self.references: list[str] = []
+
+	def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+		attributes = dict(attrs)
+		if tag == "link" and str(attributes.get("href") or "").split("?", 1)[0].endswith(".css"):
+			self.references.append(str(attributes["href"]))
+		if tag == "script" and str(attributes.get("src") or "").split("?", 1)[0].endswith(".js"):
+			self.references.append(str(attributes["src"]))
+
+
+def _export_route(export_root: Path, html: Path) -> str:
+	relative = html.relative_to(export_root).as_posix()
+	if relative == "index.html":
+		return "/"
+	if relative.endswith("/index.html"):
+		return "/" + relative.removesuffix("index.html")
+	return "/" + relative
+
+
+def validate_embedded_static_assets(export_root: Path) -> list[str]:
+	"""Validate entry assets using the URL semantics shared by Tauri and HTTP."""
+	from urllib.parse import urljoin, urlsplit
+
+	validated: list[str] = []
+	for html in sorted(export_root.rglob("*.html")):
+		parser = _StaticAssetReferences()
+		parser.feed(html.read_text(encoding="utf-8"))
+		route = _export_route(export_root, html)
+		for reference in parser.references:
+			if reference.startswith("/"):
+				raise RuntimeError(f"Embedded static asset uses an origin-root URL in {html}: {reference}")
+			# urllib does not register Tauri's custom scheme as a hierarchical URL,
+			# so use Tauri's equivalent HTTP-shaped localhost origin for RFC URL joining.
+			resolved_path = urlsplit(urljoin(f"http://tauri.localhost{route}", reference)).path
+			asset = export_root / resolved_path.lstrip("/")
+			if not asset.is_file():
+				raise RuntimeError(f"Embedded static asset reference does not exist for {html}: {reference}")
+			# The compatibility server uses the same URL path at its loopback origin.
+			http_path = urlsplit(urljoin(f"http://127.0.0.1:8787{route}", reference)).path
+			if http_path != resolved_path:
+				raise RuntimeError(f"Tauri and loopback asset resolution differ for {html}: {reference}")
+			validated.append(reference)
+	if not validated:
+		raise RuntimeError("Local console static export contains no CSS or JavaScript entry assets.")
+	return validated
 
 
 def sha256_file(path: Path) -> str:
@@ -79,6 +130,7 @@ def verify_local_frontend_export(export_root: Path) -> Path:
 	missing = [marker for marker in (LOCAL_FRONTEND_API, "/certificates", "/audit-logs") if marker not in bundle]
 	if missing:
 		raise RuntimeError(f"Local console static export is missing required integration markers: {', '.join(missing)}")
+	validate_embedded_static_assets(export_root)
 	metadata = export_root / "vyper-local-build.json"
 	metadata.write_text(json.dumps({
 		"dashboard_mode": "local",

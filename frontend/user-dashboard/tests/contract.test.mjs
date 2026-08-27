@@ -634,6 +634,24 @@ test("new pending remote requests survive refresh beside older submitted request
   assert.match(source, /request\.status === "WAITING_LOCAL_APPROVAL"/);
 });
 
+test("local export uses Tauri-compatible assets without changing central defaults", () => {
+  const config = readFileSync(new URL("../next.config.mjs", import.meta.url), "utf8");
+  const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.match(config, /NEXT_PUBLIC_VYPER_MODE === "local"/);
+  assert.match(config, /assetPrefix: localEmbeddedExport \? "\.\." : undefined/);
+  assert.match(packageJson.scripts["build:local"], /NEXT_PUBLIC_VYPER_MODE=local/);
+
+  for (const base of [
+    "tauri://localhost/",
+    "tauri://localhost/download/",
+    "http://127.0.0.1:8787/",
+    "http://127.0.0.1:8787/download/",
+  ]) {
+    assert.equal(new URL("../_next/static/chunks/app.css", base).pathname, "/_next/static/chunks/app.css");
+    assert.equal(new URL("../_next/static/chunks/app.js", base).pathname, "/_next/static/chunks/app.js");
+  }
+});
+
 test("dashboard downloads use the central Linux artifact contract without leaving the shell", () => {
   const releases = [
     { platform: "windows", architecture: "x86_64", download_url: "/downloads/windows.zip" },

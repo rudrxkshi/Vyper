@@ -300,6 +300,31 @@ def test_release_builder_stages_the_native_gui_payload(tmp_path):
 	assert '"--features", "custom-protocol"' in source
 
 
+def test_embedded_static_asset_validation_accepts_root_nested_and_loopback_compatible_paths(tmp_path):
+	builder = _load_build_release()
+	export = tmp_path / "out"
+	(export / "download").mkdir(parents=True)
+	(export / "_next" / "static" / "chunks").mkdir(parents=True)
+	(export / "_next" / "static" / "chunks" / "app.css").write_text("body{}", encoding="utf-8")
+	(export / "_next" / "static" / "chunks" / "app.js").write_text("", encoding="utf-8")
+	entry = '<link rel="stylesheet" href="../_next/static/chunks/app.css"><script src="../_next/static/chunks/app.js"></script>'
+	(export / "index.html").write_text(entry, encoding="utf-8")
+	(export / "download" / "index.html").write_text(entry, encoding="utf-8")
+	assert len(builder.validate_embedded_static_assets(export)) == 4
+
+
+def test_embedded_static_asset_validation_rejects_origin_root_and_missing_assets(tmp_path):
+	builder = _load_build_release()
+	export = tmp_path / "out"
+	export.mkdir()
+	(export / "index.html").write_text('<link rel="stylesheet" href="/_next/static/app.css">', encoding="utf-8")
+	with pytest.raises(RuntimeError, match="origin-root URL"):
+		builder.validate_embedded_static_assets(export)
+	(export / "index.html").write_text('<script src="../_next/static/missing.js"></script>', encoding="utf-8")
+	with pytest.raises(RuntimeError, match="does not exist"):
+		builder.validate_embedded_static_assets(export)
+
+
 def test_desktop_gui_artifact_resolution_supports_standard_and_custom_cargo_targets(tmp_path):
 	builder = _load_build_release()
 	frontend = tmp_path / "frontend"
@@ -494,7 +519,9 @@ def test_local_static_export_gate_requires_collection_endpoints_and_records_buil
 	export = tmp_path / "out"
 	chunks = export / "_next" / "static" / "chunks"
 	chunks.mkdir(parents=True)
-	(export / "index.html").write_text("<html>VYPER</html>", encoding="utf-8")
+	(export / "index.html").write_text(
+		'<html>VYPER<script src="../_next/static/chunks/app.js"></script></html>', encoding="utf-8",
+	)
 	(chunks / "app.js").write_text(
 		'const api="http://127.0.0.1:8765"; fetch(api+"/certificates"); fetch(api+"/audit-logs");',
 		encoding="utf-8",
