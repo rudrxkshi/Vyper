@@ -257,7 +257,9 @@ def test_systemd_units_enforce_loopback_unprivileged_ui_and_no_shell_service():
 
 def test_native_gui_is_unprivileged_narrow_and_has_a_desktop_launcher():
 	launcher = (ROOT / "packaging/linux/desktop/vyper.desktop").read_text(encoding="utf-8")
-	tauri = (ROOT / "frontend/user-dashboard/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+	tauri_path = ROOT / "frontend/user-dashboard/src-tauri/tauri.conf.json"
+	tauri = tauri_path.read_text(encoding="utf-8")
+	tauri_config = json.loads(tauri)
 	rust = (ROOT / "frontend/user-dashboard/src-tauri/src/main.rs").read_text(encoding="utf-8")
 	assert "Exec=/usr/bin/vyper-gui" in launcher
 	assert "Terminal=false" in launcher
@@ -268,6 +270,10 @@ def test_native_gui_is_unprivileged_narrow_and_has_a_desktop_launcher():
 	assert "libc::geteuid()" in rust and "refuses to run as root" in rust
 	assert "User=root" not in launcher and "sudo" not in launcher
 	assert "systemctl" not in launcher
+	assert tauri_config["bundle"]["active"] is False
+	for relative in tauri_config["bundle"]["icon"]:
+		icon = tauri_path.parent / relative
+		assert icon.is_file() and icon.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_installed_runtime_allows_only_known_console_and_tauri_origins(monkeypatch):
