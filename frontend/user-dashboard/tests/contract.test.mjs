@@ -365,6 +365,7 @@ test("async accepted jobs remain pending and are polled", () => {
   assert.equal(job.final_status, null);
   assert.equal(shouldPollLocalJob(job), true);
   assert.equal(shouldPollLocalJob({ ...job, job_state: "VERIFIED" }), false);
+  assert.equal(shouldPollLocalJob({ ...job, job_state: "REJECTED" }), false);
 });
 
 test("percentage is shown only for trustworthy numeric byte progress", () => {
@@ -683,7 +684,27 @@ test("new pending remote requests survive refresh beside older submitted request
   assert.equal(localData.remoteRequests[0].status, "WAITING_LOCAL_APPROVAL");
   const source = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
   assert.match(source, /setInterval\(\(\) => refreshDashboardData\(\), 8000\)/);
-  assert.match(source, /request\.status === "WAITING_LOCAL_APPROVAL"/);
+  assert.match(source, /\["AWAITING_LOCAL_APPROVAL", "WAITING_LOCAL_APPROVAL"\]\.includes\(request\.status\)/);
+});
+
+test("local rejection remains an explicit non-execution decision", async () => {
+  let requestedBody;
+  const client = createApiClient({
+    baseUrl: "http://local.invalid",
+    fetchImpl: async (_url, options) => {
+      requestedBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ status: "REJECTED" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await client.approveRemoteJob("central-1", { approved: false, ata_password: null });
+  assert.deepEqual(requestedBody, { approved: false, ata_password: null });
+  const source = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  assert.match(source, /rejectRemoteRequest/);
+  assert.match(source, /approved: false/);
 });
 
 test("central job detail uses the dedicated canonical central-job endpoint", async () => {
@@ -727,6 +748,9 @@ test("central selected-job snapshots advance progressively and stop polling at t
   assert.equal(preferCentralJobSnapshot(policy, profiling), policy);
   jobs = upsertCentralJob(jobs, terminal);
   assert.equal(shouldPollCentralJob(jobs[0]), false);
+  assert.equal(shouldPollCentralJob(normalizeCentralJob({
+    central_job_id: "central-rejected", status: "REJECTED", final_status: "REJECTED",
+  })), false);
 
   const listSnapshot = mergeCentralJobList(jobs, [profiling]);
   assert.equal(listSnapshot[0].final_status, "VERIFIED");
@@ -736,6 +760,7 @@ test("central selected-job snapshots advance progressively and stop polling at t
   assert.match(source, /const created = normalizeCentralJob\(await apiClient\.createCentralJob/);
   assert.match(source, /setSelectedJobId\(created\.id\)/);
   assert.doesNotMatch(source, /await apiClient\.createCentralJob[\s\S]{0,800}await refreshDashboardData/);
+  assert.doesNotMatch(source, /navigator\.(?:platform|userAgent)/);
 });
 
 test("local export uses Tauri-compatible assets without changing central defaults", () => {

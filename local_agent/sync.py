@@ -138,6 +138,14 @@ class CentralSyncClient:
 		self.timeout = timeout
 		self.auto_run_dry_run = auto_run_dry_run
 		self._approval_lock = threading.Lock()
+		self._sync_wakeup: Callable[[], None] | None = None
+
+	def set_sync_wakeup(self, callback: Callable[[], None]) -> None:
+		self._sync_wakeup = callback
+
+	def _wake_sync(self) -> None:
+		if self._sync_wakeup is not None:
+			self._sync_wakeup()
 
 	def enroll(self, enrollment_token: str, *, display_name: str | None = None) -> dict[str, Any]:
 		identity = self.identity_store.load_or_create()
@@ -270,6 +278,8 @@ class CentralSyncClient:
 		if request is None:
 			raise KeyError("Remote job request not found.")
 		if request["local_job_id"]:
+			if request["status"] == "REJECTED":
+				raise RuntimeError("Remote job request was rejected locally and cannot be approved.")
 			return str(request["local_job_id"])
 		if (request.get("payload") or {}).get("execution_mode") == "boot_sanitize":
 			raise RuntimeError(
@@ -298,10 +308,31 @@ class CentralSyncClient:
 			dry_run=request["dry_run"],
 			authorized=request["dry_run"] or local_approved,
 			ata_password=ata_password,
+			initial_event=("LOCAL_APPROVAL_GRANTED", "The local operator approved the remote sanitization request.")
+			if local_approved else None,
 		)
 		if not self.job_store.map_remote_job(central_job_id, local_job_id, local_approved=local_approved):
 			mapped = self.job_store.get_remote_request(central_job_id)
 			return str(mapped["local_job_id"])
+		self._wake_sync()
+		return local_job_id
+
+	def reject_remote_job(self, central_job_id: str) -> str:
+		request = self.job_store.get_remote_request(central_job_id)
+		if request is None:
+			raise KeyError("Remote job request not found.")
+		if request["local_job_id"]:
+			if request["status"] != "REJECTED":
+				raise RuntimeError("Remote job request has already been submitted.")
+			return str(request["local_job_id"])
+		if request["status"] not in {"AWAITING_LOCAL_APPROVAL", "WAITING_LOCAL_APPROVAL"}:
+			raise RuntimeError("Remote job request is not awaiting local approval.")
+		if request["expires_at"] <= utc_now():
+			raise RuntimeError("Remote job request has expired.")
+		local_job_id = str(uuid5(NAMESPACE_URL, f"vyper:{self._credential()['agent_id']}:{central_job_id}"))
+		if not self.job_store.reject_remote_job(central_job_id, local_job_id):
+			raise RuntimeError("Remote job request could not be rejected in its current state.")
+		self._wake_sync()
 		return local_job_id
 
 	def queue_job_updates(self) -> int:
@@ -449,6 +480,7 @@ class SyncLoop:
 		job_sync_interval_seconds: float = 1.0,
 		heartbeat_interval_seconds: float = 30.0,
 		inventory_interval_seconds: float = 60.0,
+		wakeup_event: Any | None = None,
 	) -> None:
 		self.client = client
 		self.interval_seconds = max(2.0, interval_seconds)
@@ -456,9 +488,15 @@ class SyncLoop:
 		self.heartbeat_interval_seconds = max(self.interval_seconds, heartbeat_interval_seconds)
 		self.inventory_interval_seconds = max(self.interval_seconds, inventory_interval_seconds)
 		self.stop_event = threading.Event()
+		self.wakeup_event = wakeup_event or threading.Event()
 		self.thread: threading.Thread | None = None
 		self._failure_log_times: dict[tuple[str, str, str], float] = {}
 		self.failure_log_interval_seconds = 60.0
+		if hasattr(self.client, "set_sync_wakeup"):
+			self.client.set_sync_wakeup(self.wake)
+
+	def wake(self) -> None:
+		self.wakeup_event.set()
 
 	def start(self) -> None:
 		if self.thread and self.thread.is_alive():
@@ -468,6 +506,7 @@ class SyncLoop:
 
 	def stop(self) -> None:
 		self.stop_event.set()
+		self.wakeup_event.set()
 		if self.thread:
 			self.thread.join(timeout=2)
 
@@ -506,9 +545,10 @@ class SyncLoop:
 		next_inventory = 0.0
 		next_job_poll = 0.0
 		while not self.stop_event.is_set():
+			self.wakeup_event.clear()
 			now = time.monotonic()
 			next_heartbeat, next_inventory, next_job_poll = self._run_iteration(
 				now=now, next_heartbeat=next_heartbeat, next_inventory=next_inventory,
 				next_job_poll=next_job_poll,
 			)
-			self.stop_event.wait(self.job_sync_interval_seconds)
+			self.wakeup_event.wait(self.job_sync_interval_seconds)

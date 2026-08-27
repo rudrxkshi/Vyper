@@ -18,7 +18,7 @@ ACTIVE_STATES = (
 	"RUNNING",
 	"VERIFYING",
 )
-TERMINAL_STATES = {"VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"}
+TERMINAL_STATES = {"VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED", "REJECTED"}
 
 
 def utc_now() -> str:
@@ -243,10 +243,14 @@ class LocalJobStore:
 		return self.get_job(local_job_id)
 
 	def update_progress(self, local_job_id: str, progress: dict[str, Any]) -> None:
-		job = self.get_job(local_job_id)
-		if job is None or job["job_state"] in TERMINAL_STATES:
-			return
-		self.transition(local_job_id, job["job_state"], "Measured progress update.", progress=progress)
+		with self._connect() as connection:
+			connection.execute(
+				f"""
+				UPDATE local_jobs SET progress_json = ?, updated_at = ?, message = 'Measured progress update.'
+				WHERE local_job_id = ? AND job_state NOT IN ({','.join('?' for _ in TERMINAL_STATES)})
+				""",
+				(self._dump(progress), utc_now(), local_job_id, *sorted(TERMINAL_STATES)),
+			)
 
 	def record_event_once(
 		self,
@@ -565,6 +569,52 @@ class LocalJobStore:
 				WHERE central_job_id = ? AND local_job_id IS NULL
 				""",
 				(local_job_id, int(local_approved), utc_now(), central_job_id),
+			)
+		return updated.rowcount == 1
+
+	def reject_remote_job(self, central_job_id: str, local_job_id: str) -> bool:
+		"""Persist a local rejection and its terminal job record without executing a worker."""
+		now = utc_now()
+		with self._connect() as connection:
+			connection.execute("BEGIN IMMEDIATE")
+			request = connection.execute(
+				"SELECT requested_target, dry_run, local_job_id, status FROM remote_job_requests WHERE central_job_id = ?",
+				(central_job_id,),
+			).fetchone()
+			if request is None:
+				return False
+			if request["local_job_id"] is not None:
+				return request["local_job_id"] == local_job_id and request["status"] == "REJECTED"
+			inserted = connection.execute(
+				"""
+				INSERT OR IGNORE INTO local_jobs (
+					local_job_id, api_version, target, normalized_target, dry_run,
+					authorization_metadata_json, job_state, final_status, created_at,
+					finished_at, updated_at, message
+				) VALUES (?, '2', ?, ?, ?, ?, 'REJECTED', 'REJECTED', ?, ?, ?, ?)
+				""",
+				(
+					local_job_id, request["requested_target"], normalize_target(request["requested_target"]),
+					int(request["dry_run"]), self._dump({"approved": False, "source": "local_rejection"}),
+					now, now, now, "The local operator rejected the remote sanitization request.",
+				),
+			)
+			if inserted.rowcount == 1:
+				self._append_event(
+					connection, local_job_id, "LOCAL_APPROVAL_REJECTED",
+					"The local operator rejected the remote sanitization request.", None, now,
+				)
+				self._append_event(
+					connection, local_job_id, "REJECTED",
+					"Remote sanitization was rejected locally without execution.", None, now,
+				)
+			updated = connection.execute(
+				"""
+				UPDATE remote_job_requests SET local_job_id = ?, local_approved = 0,
+				status = 'REJECTED', updated_at = ?
+				WHERE central_job_id = ? AND local_job_id IS NULL
+				""",
+				(local_job_id, now, central_job_id),
 			)
 		return updated.rowcount == 1
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ def create_app(
 	worker_executor = executor or ProcessJobExecutor(
 		resolved_database_path, max_workers=max(1, int(os.getenv("VYPER_LOCAL_AGENT_WORKERS", "2"))),
 	)
+	sync_wakeup_event = getattr(worker_executor, "sync_wakeup_event", threading.Event())
 
 	@asynccontextmanager
 	async def lifespan(app: FastAPI):
@@ -79,6 +81,7 @@ def create_app(
 				job_sync_interval_seconds=float(os.getenv("VYPER_JOB_SYNC_SECONDS", "1")),
 				heartbeat_interval_seconds=float(os.getenv("VYPER_HEARTBEAT_INTERVAL", "30")),
 				inventory_interval_seconds=float(os.getenv("VYPER_INVENTORY_INTERVAL", "60")),
+				wakeup_event=sync_wakeup_event,
 			)
 		recovered = store.recover_interrupted()
 		if recovered:
@@ -120,13 +123,15 @@ def create_app(
 
 	def dispatch_local_job(
 		*, target: str, dry_run: bool, authorized: bool, ata_password: str | None = None,
-		local_job_id: str | None = None,
+		local_job_id: str | None = None, initial_event: tuple[str, str] | None = None,
 	) -> LocalJobAccepted:
 		local_job_id = local_job_id or str(uuid4())
 		existing = store().get_job(local_job_id)
 		if existing is not None:
 			if existing["target"] != target or bool(existing["dry_run"]) != bool(dry_run):
 				raise HTTPException(status_code=409, detail="Local job idempotency key conflicts with an existing request.")
+			if initial_event and store().record_event_once(local_job_id, initial_event[0], initial_event[1]) is not None:
+				sync_wakeup_event.set()
 			return LocalJobAccepted(local_job_id=local_job_id, target=target)
 		authorization_metadata = {"approved": bool(authorized), "has_ata_password": bool(ata_password)}
 		try:
@@ -136,6 +141,8 @@ def create_app(
 			)
 		except DuplicateActiveTargetError as exc:
 			raise HTTPException(status_code=409, detail="A destructive job is already active for this physical target.") from exc
+		if initial_event:
+			store().record_event_once(local_job_id, initial_event[0], initial_event[1])
 		authorization = {"approved": bool(authorized)}
 		if ata_password:
 			authorization["ata_password"] = ata_password
@@ -144,7 +151,9 @@ def create_app(
 				app.state.worker_executor.submit_job(local_job_id, target, authorization, dry_run)
 				authorization.clear()
 			else:
-				worker = LocalJobWorker(store=store(), agent=app.state.vyper_agent)
+				worker = LocalJobWorker(
+					store=store(), agent=app.state.vyper_agent, milestone_notifier=sync_wakeup_event.set,
+				)
 				app.state.worker_executor.submit(worker.run, local_job_id, target, authorization, dry_run)
 		except Exception as exc:
 			authorization.clear()
@@ -154,8 +163,13 @@ def create_app(
 				"verification": None, "evidence": None, "certificate": None,
 				"error": {"code": "DISPATCH_FAILURE", "message": "Local worker dispatch failed."},
 			})
+			sync_wakeup_event.set()
 			raise HTTPException(status_code=503, detail="Local worker dispatch failed.") from exc
-		log_job("accepted", local_job_id=local_job_id, target=target, job_state="PENDING", event_sequence=1)
+		accepted = store().get_job(local_job_id)
+		log_job(
+			"accepted", local_job_id=local_job_id, target=target, job_state="PENDING",
+			event_sequence=accepted["state_history"][-1]["sequence"],
+		)
 		return LocalJobAccepted(local_job_id=local_job_id, target=target)
 
 	@app.get("/health", tags=["health"])
@@ -248,6 +262,7 @@ def create_app(
 				status_code=409,
 				detail="Cancellation is only supported before execution starts; the active pathway cannot be safely interrupted.",
 			)
+		sync_wakeup_event.set()
 		return store().get_job(local_job_id)
 
 	@app.post("/sync/enroll", dependencies=[Depends(_require_local_api_key)])
@@ -278,17 +293,20 @@ def create_app(
 	def approve_remote_job(central_job_id: str, payload: RemoteJobApproval):
 		if app.state.sync_client is None:
 			raise HTTPException(status_code=503, detail="Central synchronization is not configured.")
-		if not payload.approved:
-			raise HTTPException(status_code=403, detail="Explicit local approval is required.")
 		try:
-			local_job_id = app.state.sync_client.approve_remote_job(
-				central_job_id, local_approved=True, ata_password=payload.ata_password,
-			)
+			if payload.approved:
+				local_job_id = app.state.sync_client.approve_remote_job(
+					central_job_id, local_approved=True, ata_password=payload.ata_password,
+				)
+				decision_status = "SUBMITTED"
+			else:
+				local_job_id = app.state.sync_client.reject_remote_job(central_job_id)
+				decision_status = "REJECTED"
 		except PermissionError as exc:
 			raise HTTPException(status_code=403, detail=str(exc)) from exc
 		except (KeyError, RuntimeError) as exc:
 			raise HTTPException(status_code=409, detail=str(exc)) from exc
-		return {"central_job_id": central_job_id, "local_job_id": local_job_id, "status": "SUBMITTED"}
+		return {"central_job_id": central_job_id, "local_job_id": local_job_id, "status": decision_status}
 
 	return app
 

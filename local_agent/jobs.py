@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from dataclasses import fields, is_dataclass
-from typing import Any
+from typing import Any, Callable
 
 from fastapi.encoders import jsonable_encoder
 
@@ -124,13 +124,23 @@ def log_job(event: str, **fields: Any) -> None:
 
 
 class LocalJobWorker:
-	def __init__(self, *, store: LocalJobStore, agent: Any) -> None:
+	def __init__(self, *, store: LocalJobStore, agent: Any, milestone_notifier: Callable[[], None] | None = None) -> None:
 		self.store = store
 		self.agent = agent
+		self.milestone_notifier = milestone_notifier
+
+	def _notify_milestone(self) -> None:
+		if self.milestone_notifier is None:
+			return
+		try:
+			self.milestone_notifier()
+		except Exception:
+			logger.warning("Unable to signal the sync worker after a durable local milestone.")
 
 	def run(self, local_job_id: str, target: str, authorization: dict[str, Any], dry_run: bool) -> None:
 		if not self.store.start_job(local_job_id, os.getpid()):
 			return
+		self._notify_milestone()
 		started = self.store.get_job(local_job_id)
 		log_job(
 			"worker_started",
@@ -162,6 +172,7 @@ class LocalJobWorker:
 				self._import_state_history(local_job_id, payload.get("state_history") or [])
 			terminal = self._terminal_payload(payload, dry_run=dry_run)
 			stored = self.store.complete(local_job_id, terminal)
+			self._notify_milestone()
 			log_job(
 				"terminal_result",
 				local_job_id=local_job_id,
@@ -184,6 +195,7 @@ class LocalJobWorker:
 				"error": {"code": "WORKER_FAILURE", "message": "Local sanitization worker failed."},
 			}
 			stored = self.store.complete(local_job_id, failure)
+			self._notify_milestone()
 			log_job(
 				"worker_failure",
 				local_job_id=local_job_id,
@@ -209,6 +221,7 @@ class LocalJobWorker:
 			progress=progress,
 		)
 		if stored is not None:
+			self._notify_milestone()
 			log_job(
 				"transition",
 				local_job_id=local_job_id,
@@ -238,6 +251,7 @@ class LocalJobWorker:
 			return
 		stored = self.store.record_event_once(local_job_id, event_text, message)
 		if stored is not None:
+			self._notify_milestone()
 			log_job(
 				"pipeline_stage",
 				local_job_id=local_job_id,

@@ -103,7 +103,8 @@ progress and one terminal result through a durable SQLite outbox with bounded
 retry.
 This works through ordinary outbound NAT without exposing the local API.
 
-Destructive remote requests always stop at `WAITING_LOCAL_APPROVAL`. Before an
+Normal destructive remote requests always stop at `AWAITING_LOCAL_APPROVAL`
+(`WAITING_LOCAL_APPROVAL` remains the boot-environment lifecycle name). Before an
 assignment can reach that state, the agent verifies the Ed25519 signature,
 central signing-key identity, intended agent, allowlisted operation, issue/expiry
 times, and durable command nonce. The local console then re-discovers the device
@@ -112,8 +113,10 @@ job. Central authorization is recorded but does not replace local approval. ATA
 passwords are transient and are never placed in the central request or durable
 outbox.
 
-Synchronization remains polling-based and outbound-only; the central service
-does not open an inbound control channel to the local machine.
+Synchronization remains outbound-only; durable job milestones wake the local
+outbox worker immediately, with bounded periodic synchronization retained for
+recovery. The central service does not open an inbound control channel to the
+local machine.
 
 ## Linux Local Console package
 

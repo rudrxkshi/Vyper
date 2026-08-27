@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -327,8 +328,8 @@ def test_job_claim_is_assigned_atomic_idempotent_and_waits_for_local_approval(tm
 	assert claim.json()["status"] == "CLAIMED"
 	assert second_claim.status_code == 200
 	assert second_claim.json()["central_job_id"] == job["central_job_id"]
-	assert acknowledged.json() == {"accepted": True, "duplicate": False, "status": "WAITING_LOCAL_APPROVAL"}
-	assert duplicate_ack.json() == {"accepted": True, "duplicate": True, "status": "WAITING_LOCAL_APPROVAL"}
+	assert acknowledged.json() == {"accepted": True, "duplicate": False, "status": "AWAITING_LOCAL_APPROVAL"}
+	assert duplicate_ack.json() == {"accepted": True, "duplicate": True, "status": "AWAITING_LOCAL_APPROVAL"}
 	assert after_ack.status_code == 204
 
 
@@ -626,8 +627,8 @@ def test_poll_persists_before_ack_and_exposes_destructive_request_without_execut
 	assert stored["status"] == "WAITING_LOCAL_APPROVAL"
 	assert stored["local_approved"] is False
 	assert stored["local_job_id"] is None
-	assert central_job["status"] == "WAITING_LOCAL_APPROVAL"
-	assert central_job["local_execution_state"] == "WAITING_LOCAL_APPROVAL"
+	assert central_job["status"] == "AWAITING_LOCAL_APPROVAL"
+	assert central_job["local_execution_state"] == "AWAITING_LOCAL_APPROVAL"
 	assert ack_observations == [True]
 	assert submissions == []
 
@@ -1120,6 +1121,7 @@ def test_intermediate_pipeline_events_queue_once_with_sequence_idempotency(tmp_p
 	store.record_event_once(local_job_id, "STAGE_PROFILING_STARTED", "Profiling started.")
 	store.record_event_once(local_job_id, "STAGE_PROFILING_COMPLETED", "Profiling completed.")
 	store.record_event_once(local_job_id, "STAGE_POLICY_STARTED", "Policy started.")
+	store.update_progress(local_job_id, {"kind": "bytes", "bytes_completed": 512, "bytes_total": 1024})
 	store.save_remote_request({
 		"central_job_id": central_job_id, "target_identity": "fixture-identity", "requested_target": "/dev/mock",
 		"dry_run": False, "authorization_policy": {"central_approved": True},
@@ -1141,6 +1143,9 @@ def test_intermediate_pipeline_events_queue_once_with_sequence_idempotency(tmp_p
 	assert first_count == len(queued)
 	assert second_count == 0
 	assert stage_states == ["STAGE_PROFILING_STARTED", "STAGE_PROFILING_COMPLETED", "STAGE_POLICY_STARTED"]
+	assert all(item["payload"].get("progress") != {
+		"kind": "bytes", "bytes_completed": 512, "bytes_total": 1024,
+	} for item in queued)
 	assert len({item["idempotency_key"] for item in queued}) == len(queued)
 
 
@@ -1193,6 +1198,51 @@ def test_sync_loop_isolates_poll_failure_and_continues_flushing_and_iterating(ca
 	assert client.delivered_heartbeats == 1
 	assert "operation=poll_job" in caplog.text
 	assert "exception=RuntimeError" in caplog.text
+
+
+def test_sync_loop_wakeup_flushes_job_updates_without_advancing_other_cadences():
+	class Client:
+		def __init__(self):
+			self.job_updates = 0
+			self.polls = 0
+			self.heartbeats = 0
+			self.inventories = 0
+			self.first = threading.Event()
+			self.second = threading.Event()
+
+		def set_sync_wakeup(self, callback):
+			self.wake = callback
+
+		def queue_heartbeat(self):
+			self.heartbeats += 1
+
+		def queue_inventory(self):
+			self.inventories += 1
+
+		def poll_job(self):
+			self.polls += 1
+
+		def queue_job_updates(self):
+			self.job_updates += 1
+			(self.first if self.job_updates == 1 else self.second).set()
+
+		flush_outbox = lambda self: None
+
+	client = Client()
+	wakeup = threading.Event()
+	loop = SyncLoop(client, interval_seconds=5, job_sync_interval_seconds=60, wakeup_event=wakeup)
+	loop.start()
+	try:
+		assert client.first.wait(timeout=2)
+		loop.wake()
+		assert client.second.wait(timeout=2)
+	finally:
+		loop.stop()
+
+	assert client.job_updates == 2
+	assert client.polls == 1
+	assert client.heartbeats == 1
+	assert client.inventories == 1
 
 
 def test_sync_loop_refreshes_inventory_on_existing_bounded_cadence():
@@ -1264,6 +1314,8 @@ def test_remote_destructive_request_requires_local_approval_and_revalidates_iden
 		central_url="http://central.test", credential_store=credential_store, job_store=store, discovery=discovery,
 		submit_local_job=lambda **kwargs: submissions.append(kwargs) or "local-1",
 	)
+	wakeups = []
+	sync.set_sync_wakeup(lambda: wakeups.append("wake"))
 	request = {
 		"central_job_id": "central-1", "target_identity": hardware_identity(device.to_dict(), "agent-1"),
 		"requested_target": "/dev/sdb", "dry_run": False,
@@ -1275,8 +1327,61 @@ def test_remote_destructive_request_requires_local_approval_and_revalidates_iden
 		sync.approve_remote_job("central-1", local_approved=False)
 	assert sync.approve_remote_job("central-1", local_approved=True) == "local-1"
 	assert submissions[0]["authorized"] is True
+	assert submissions[0]["initial_event"] == (
+		"LOCAL_APPROVAL_GRANTED", "The local operator approved the remote sanitization request.",
+	)
+	assert wakeups == ["wake"]
 	assert sync.approve_remote_job("central-1", local_approved=True) == "local-1"
 	assert len(submissions) == 1
+
+
+def test_local_rejection_is_durable_wakes_sync_and_reaches_central_without_execution(tmp_path):
+	with _central_client(tmp_path) as central:
+		enrolled, headers, _asset, job = _prepare_agent_asset_job(central)
+		central.get("/agent/jobs/next", headers=headers)
+		central.post(f"/agent/jobs/{job['central_job_id']}/delivery-ack", headers=headers)
+		credential_store = AgentCredentialStore(tmp_path / "credential.json")
+		credential_store.save(enrolled)
+		store = LocalJobStore(tmp_path / "rejection.db")
+		store.save_remote_request({
+			"central_job_id": job["central_job_id"], "target_identity": job["target_identity"],
+			"requested_target": job["requested_target"], "dry_run": False,
+			"authorization_policy": {"central_approved": True}, "expires_at": job["expires_at"],
+			"idempotency_key": job["idempotency_key"], "nonce": job["nonce"],
+		})
+		calls = []
+
+		def forward(request):
+			calls.append(request.url.path)
+			response = central.request(
+				request.method, request.url.raw_path.decode("ascii"),
+				headers=dict(request.headers), content=request.content,
+			)
+			return httpx.Response(response.status_code, headers=dict(response.headers), content=response.content)
+
+		sync = CentralSyncClient(
+			central_url="http://central.test", credential_store=credential_store, job_store=store,
+			discovery=DiscoveryStub([]), submit_local_job=lambda **kwargs: pytest.fail("rejection executed a job"),
+			transport=httpx.MockTransport(forward),
+		)
+		wakeup = threading.Event()
+		sync.set_sync_wakeup(wakeup.set)
+		local_job_id = sync.reject_remote_job(job["central_job_id"])
+		assert wakeup.is_set()
+		assert sync.queue_job_updates() == 3
+		assert sync.flush_outbox() == 3
+		stored = central.get(f"/central-jobs/{job['central_job_id']}").json()
+
+	local = store.get_job(local_job_id)
+	assert [event["state"] for event in local["state_history"]] == ["LOCAL_APPROVAL_REJECTED", "REJECTED"]
+	assert local["execution"] is None and local["evidence"] is None and local["certificate"] is None
+	assert stored["status"] == stored["final_status"] == "REJECTED"
+	assert stored["result"]["final_status"] == "REJECTED"
+	assert calls == [
+		f"/agent/jobs/{job['central_job_id']}/events",
+		f"/agent/jobs/{job['central_job_id']}/events",
+		f"/agent/jobs/{job['central_job_id']}/result",
+	]
 
 
 def test_remote_identity_or_system_state_change_blocks_execution(tmp_path):

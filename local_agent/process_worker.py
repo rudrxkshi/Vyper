@@ -14,14 +14,16 @@ from .storage import ACTIVE_STATES, LocalJobStore
 
 
 def _run_native_job(database_path: str, local_job_id: str, target: str, authorization: dict[str, Any], dry_run: bool,
-	force_executor_dry_run: bool) -> None:
+	force_executor_dry_run: bool, sync_wakeup_event: Any | None = None) -> None:
 	"""Fixed child entry point. No command strings or shell input cross this boundary."""
 	store = LocalJobStore(database_path)
 	effective_dry_run = bool(dry_run) or bool(force_executor_dry_run)
 	socket_path = os.getenv("VYPER_EXECUTOR_SOCKET")
 	agent = (PrivilegedExecutorClient(socket_path, execution_mode=os.getenv("VYPER_EXECUTION_MODE", "normal_local"))
 		if socket_path else VYPERAgent(dry_run=effective_dry_run))
-	LocalJobWorker(store=store, agent=agent).run(local_job_id, target, authorization, effective_dry_run)
+	worker = (LocalJobWorker(store=store, agent=agent, milestone_notifier=sync_wakeup_event.set)
+		if sync_wakeup_event is not None else LocalJobWorker(store=store, agent=agent))
+	worker.run(local_job_id, target, authorization, effective_dry_run)
 
 
 class ProcessJobExecutor:
@@ -31,6 +33,7 @@ class ProcessJobExecutor:
 		self.database_path = str(database_path)
 		self.max_workers = max(1, int(max_workers))
 		self._context = multiprocessing.get_context("spawn")
+		self.sync_wakeup_event = self._context.Event()
 		self._semaphore = threading.BoundedSemaphore(self.max_workers)
 		self._processes: set[multiprocessing.Process] = set()
 		self._lock = threading.Lock()
@@ -40,7 +43,10 @@ class ProcessJobExecutor:
 			raise RuntimeError("Native worker capacity is exhausted.")
 		force_dry_run = os.getenv("VYPER_EXECUTOR_DRY_RUN", "true").lower() in {"1", "true", "yes"}
 		process = self._context.Process(target=_run_native_job,
-			args=(self.database_path, local_job_id, target, dict(authorization), dry_run, force_dry_run),
+			args=(
+				self.database_path, local_job_id, target, dict(authorization), dry_run,
+				force_dry_run, self.sync_wakeup_event,
+			),
 			name=f"vyper-native-{local_job_id[:8]}", daemon=False)
 		try:
 			process.start()
@@ -72,6 +78,7 @@ class ProcessJobExecutor:
 				"verification": None, "evidence": None, "certificate": None,
 				"error": {"code": "WORKER_EXIT", "message": "Native worker exited unexpectedly.", "exit_code": exit_code},
 			})
+			self.sync_wakeup_event.set()
 		log_job("worker_exit", local_job_id=local_job_id, target=target, worker_pid=pid,
 			worker_exit_code=exit_code, job_state=(store.get_job(local_job_id) or {}).get("job_state"))
 

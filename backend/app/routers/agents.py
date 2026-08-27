@@ -50,7 +50,7 @@ from ..security import record_audit_event, record_security_event
 
 
 router = APIRouter(tags=["agents"])
-_TERMINAL = {"VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"}
+_TERMINAL = {"VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED", "REJECTED"}
 _OPERATOR_READ = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR, OperatorRole.AUDITOR, OperatorRole.VIEWER)
 _OPERATOR_WRITE = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR)
 _SECURITY_APPROVER = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN)
@@ -757,10 +757,10 @@ def claim_next_job(response: Response, agent: AgentRecord = Depends(authenticate
 		record_audit_event(db, actor="system", action="CENTRAL_JOB_EXPIRED", resource=f"central-job:{job.central_job_id}", metadata={"reason": "claim_window_expired"}, organization_id=job.organization_id)
 		record_security_event(db, event_type="CENTRAL_JOB_EXPIRED", severity="WARNING", actor="system", resource=f"central-job:{job.central_job_id}", central_job_id=job.central_job_id, metadata={"reason": "claim_window_expired"}, organization_id=job.organization_id)
 	# Replay assignments that were returned but never durably acknowledged by the
-	# endpoint. This also recovers pre-acknowledgement WAITING_LOCAL_APPROVAL rows.
+	# endpoint. This also recovers pre-acknowledgement local-approval rows.
 	job = db.execute(select(CentralJobRecord).where(
 		CentralJobRecord.agent_id == agent.agent_id,
-		CentralJobRecord.status.in_(("CLAIMED", "WAITING_LOCAL_APPROVAL")),
+		CentralJobRecord.status.in_(("CLAIMED", "AWAITING_LOCAL_APPROVAL", "WAITING_LOCAL_APPROVAL")),
 		CentralJobRecord.local_execution_state.is_(None),
 		CentralJobRecord.expires_at > now,
 	).order_by(CentralJobRecord.claimed_at, CentralJobRecord.created_at)).scalars().first()
@@ -814,13 +814,14 @@ def acknowledge_job_delivery(central_job_id: str, agent: AgentRecord = Depends(a
 	job = _owned_job(db, central_job_id, agent)
 	if job.local_execution_state is not None:
 		return {"accepted": True, "duplicate": True, "status": job.status}
-	if job.status not in {"CLAIMED", "WAITING_LOCAL_APPROVAL"}:
+	if job.status not in {"CLAIMED", "AWAITING_LOCAL_APPROVAL", "WAITING_LOCAL_APPROVAL"}:
 		raise HTTPException(status_code=409, detail="Central job is not awaiting delivery acknowledgement.")
 	execution_mode = (job.request_json or {}).get("execution_mode", "normal_local")
 	requires_local_approval = execution_mode == "boot_sanitize" or not job.dry_run
-	job.local_execution_state = "WAITING_LOCAL_APPROVAL" if requires_local_approval else "READY"
+	approval_state = "WAITING_LOCAL_APPROVAL" if execution_mode == "boot_sanitize" else "AWAITING_LOCAL_APPROVAL"
+	job.local_execution_state = approval_state if requires_local_approval else "READY"
 	if requires_local_approval:
-		job.status = "WAITING_LOCAL_APPROVAL"
+		job.status = approval_state
 	job.updated_at = utc_now()
 	db.commit()
 	return {"accepted": True, "duplicate": False, "status": job.status}
@@ -871,6 +872,15 @@ def upload_event(central_job_id: str, payload: AgentJobEventUpload, agent: Agent
 		job.started_at = job.started_at or utc_now()
 	elif payload.state == "VERIFYING":
 		job.status = "VERIFYING"
+	elif payload.state == "LOCAL_APPROVAL_GRANTED":
+		job.status = "LOCAL_APPROVAL_GRANTED"
+	elif payload.state == "LOCAL_APPROVAL_REJECTED":
+		job.status = "REJECTED"
+		job.final_status = "REJECTED"
+		job.finished_at = utc_now()
+		job.error_json = {"code": "LOCAL_APPROVAL_REJECTED", "message": "The local operator rejected this request."}
+	elif payload.state == "AWAITING_LOCAL_APPROVAL":
+		job.status = "AWAITING_LOCAL_APPROVAL"
 	elif payload.state in {"PREPARING_BOOT", "AWAITING_REBOOT", "BOOT_ENVIRONMENT_STARTED", "VALIDATING_TARGET", "WAITING_LOCAL_APPROVAL"}:
 		job.status = payload.state
 	record_audit_event(db, actor=f"agent:{agent.agent_id}", action="JOB_EVENT_ACCEPTED", resource=f"central-job:{central_job_id}",

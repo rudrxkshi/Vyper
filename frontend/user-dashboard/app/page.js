@@ -47,7 +47,7 @@ import { selectLinuxX64Release } from "../lib/downloads.mjs";
 import DownloadsContent from "./downloads-content";
 
 const PRODUCT_VERSION = "1.0.0-rc1";
-const TERMINAL_JOB_STATES = new Set(["VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"]);
+const TERMINAL_JOB_STATES = new Set(["VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED", "REJECTED", "EXPIRED"]);
 
 function newDashboardIdempotencyKey() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -567,6 +567,18 @@ export default function VyperDashboard() {
     }
   }
 
+  async function rejectRemoteRequest(centralJobId) {
+    if (!window.confirm("Reject this remote sanitization request without executing it?")) return;
+    setRemoteApprovalError("");
+    try {
+      await apiClient.approveRemoteJob(centralJobId, { approved: false, ata_password: null });
+      setRemoteApprovalPassword("");
+      await refreshDashboardData();
+    } catch (error) {
+      setRemoteApprovalError(formatApiError(error));
+    }
+  }
+
   function persistSettings() {
     saveApiSettings(window.localStorage, { apiUrl, apiKey });
     setSavedMsg("Settings saved.");
@@ -892,8 +904,11 @@ export default function VyperDashboard() {
                         <td>{request.expires_at}</td>
                         <td className="nb-mono">{request.local_job_id || "—"}</td>
                         <td>
-                          {request.payload?.execution_mode === "boot_sanitize" ? "Use vyper system-disk prepare" : !request.dry_run && request.status === "WAITING_LOCAL_APPROVAL" ? (
-                            <button type="button" className="nb-btn small primary" onClick={() => approveRemoteRequest(request.central_job_id)}>Approve locally</button>
+                          {request.payload?.execution_mode === "boot_sanitize" ? "Use vyper system-disk prepare" : !request.dry_run && ["AWAITING_LOCAL_APPROVAL", "WAITING_LOCAL_APPROVAL"].includes(request.status) ? (
+                            <div className="nb-btn-row">
+                              <button type="button" className="nb-btn small primary" onClick={() => approveRemoteRequest(request.central_job_id)}>Approve locally</button>
+                              <button type="button" className="nb-btn small" onClick={() => rejectRemoteRequest(request.central_job_id)}>Reject</button>
+                            </div>
                           ) : "—"}
                         </td>
                       </tr>

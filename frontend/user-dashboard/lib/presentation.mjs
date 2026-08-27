@@ -1,5 +1,10 @@
 export const JOB_STATE_META = {
+  QUEUED: { stage: -1, tone: "pend", label: "Queued" },
+  CLAIMED: { stage: -1, tone: "acc", label: "Claimed" },
   PENDING: { stage: -1, tone: "pend", label: "Pending" },
+  AWAITING_LOCAL_APPROVAL: { stage: -1, tone: "warn", label: "Awaiting local approval" },
+  WAITING_LOCAL_APPROVAL: { stage: -1, tone: "warn", label: "Awaiting local approval" },
+  LOCAL_APPROVAL_GRANTED: { stage: -1, tone: "acc", label: "Locally approved" },
   PROFILING: { stage: 0, tone: "acc", label: "Profiling" },
   POLICY_SELECTED: { stage: 1, tone: "acc", label: "Policy selected" },
   AWAITING_AUTHORIZATION: { stage: 1, tone: "warn", label: "Awaiting authorization" },
@@ -10,6 +15,7 @@ export const JOB_STATE_META = {
   INCONCLUSIVE: { stage: 3, tone: "warn", label: "Inconclusive" },
   UNSUPPORTED: { stage: 0, tone: "bad", label: "Unsupported" },
   CANCELLED: { stage: -1, tone: "pend", label: "Cancelled" },
+  REJECTED: { stage: -1, tone: "bad", label: "Rejected" },
 };
 
 const FINAL_STATUS_META = {
@@ -18,6 +24,7 @@ const FINAL_STATUS_META = {
   INCONCLUSIVE: { tone: "warn", label: "Inconclusive", successful: false },
   UNSUPPORTED: { tone: "bad", label: "Unsupported", successful: false },
   CANCELLED: { tone: "pend", label: "Cancelled", successful: false },
+  REJECTED: { tone: "bad", label: "Rejected", successful: false },
   PENDING: { tone: "pend", label: "Pending", successful: false },
   PROFILING: { tone: "acc", label: "Profiling", successful: false },
   POLICY_SELECTED: { tone: "acc", label: "Policy selected", successful: false },
@@ -253,7 +260,9 @@ export function getProgressPresentation(progress) {
 }
 
 export function shouldPollLocalJob(job) {
-  return Boolean(job?.id) && !["VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"].includes(job.job_state);
+  return Boolean(job?.id)
+    && !["VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED", "REJECTED", "EXPIRED"]
+      .includes(job.job_state);
 }
 
 export function normalizeRemoteAgent(agent) {
@@ -285,7 +294,7 @@ export function normalizeCentralJob(job) {
     state_history_json: resultHistory.length ? resultHistory : eventHistory,
     error_json: result.error ?? null,
     certificate: result.certificate ?? null,
-    waiting_local_approval: job?.status === "WAITING_LOCAL_APPROVAL",
+    waiting_local_approval: ["AWAITING_LOCAL_APPROVAL", "WAITING_LOCAL_APPROVAL"].includes(job?.status),
     execution_mode: job?.execution_mode || job?.request?.execution_mode || "normal_local",
     boot_lifecycle: (job?.execution_mode || job?.request?.execution_mode) === "boot_sanitize"
       ? (job?.boot_lifecycle || job?.local_execution_state || job?.status || "PREPARING_BOOT")

@@ -149,6 +149,8 @@ class BlockingAgent(StubAgent):
 			event_callback("PROFILING")
 			event_callback("POLICY_SELECTED")
 			event_callback("RUNNING")
+		if progress_callback and self.method == "HDD_OVERWRITE":
+			progress_callback(SimpleNamespace(bytes_written=512, total_bytes=1024))
 		self.started.set()
 		self.release.wait(timeout=5)
 		if event_callback:
@@ -259,6 +261,32 @@ def test_remote_requests_alias_exposes_new_pending_request_ahead_of_older_submit
 	assert response.json()[0]["local_approved"] is False
 
 
+def test_remote_request_rejection_api_records_decision_without_approval_or_execution(tmp_path):
+	class SyncClientStub:
+		def __init__(self):
+			self.rejections = []
+
+		def reject_remote_job(self, central_job_id):
+			self.rejections.append(central_job_id)
+			return "local-rejected"
+
+	client, _agent, executor = _client(tmp_path)
+	sync_client = SyncClientStub()
+	with client:
+		client.app.state.sync_client = sync_client
+		response = client.post(
+			"/remote-jobs/central-rejected/approve",
+			json={"approved": False, "ata_password": None},
+		)
+
+	assert response.status_code == 200
+	assert response.json() == {
+		"central_job_id": "central-rejected", "local_job_id": "local-rejected", "status": "REJECTED",
+	}
+	assert sync_client.rejections == ["central-rejected"]
+	assert executor.calls == []
+
+
 def test_post_returns_202_and_persists_pending_before_execution(tmp_path):
 	client, agent, executor = _client(tmp_path)
 	with client:
@@ -311,6 +339,58 @@ def test_pipeline_stage_events_persist_once_without_replacing_job_state(tmp_path
 		"STAGE_PROFILING_COMPLETED", "STAGE_POLICY_STARTED",
 	]
 	assert [event["sequence"] for event in job["state_history"]] == [1, 2, 3, 4, 5]
+
+
+def test_every_pipeline_milestone_wakes_sync_but_byte_progress_does_not(tmp_path):
+	store = LocalJobStore(tmp_path / "milestone-wakeup.db")
+	store.create_job(
+		local_job_id="wake-job", api_version="2", target="/dev/mock", dry_run=False,
+		authorization_metadata={"approved": True},
+	)
+	wakeups = []
+
+	def observe_committed_milestone():
+		wakeups.append(store.get_job("wake-job")["state_history"][-1]["state"])
+
+	worker = LocalJobWorker(store=store, agent=object(), milestone_notifier=observe_committed_milestone)
+	milestones = [
+		f"STAGE_{stage}_{outcome}"
+		for stage in ("PROFILING", "POLICY", "EXECUTION", "VERIFICATION", "EVIDENCE", "CERTIFICATE")
+		for outcome in ("STARTED", "COMPLETED", "FAILED")
+	]
+	for milestone in milestones:
+		worker._stage_event("wake-job", milestone)
+	worker._progress_event("wake-job", {"bytes_written": 512, "total_bytes": 1024})
+
+	job = store.get_job("wake-job")
+	assert wakeups == milestones
+	assert [event["state"] for event in job["state_history"]][1:] == milestones
+	assert job["progress"] == {"kind": "bytes", "bytes_completed": 512, "bytes_total": 1024}
+
+
+def test_worker_wakes_after_durable_start_transitions_and_terminal_result(tmp_path):
+	store = LocalJobStore(tmp_path / "terminal-wakeup.db")
+	store.create_job(
+		local_job_id="terminal-wake-job", api_version="2", target="/dev/mock", dry_run=False,
+		authorization_metadata={"approved": True},
+	)
+	wakeups = []
+
+	def observe_committed_state():
+		job = store.get_job("terminal-wake-job")
+		wakeups.append((job["job_state"], job["state_history"][-1]["state"]))
+
+	LocalJobWorker(
+		store=store, agent=StubAgent(), milestone_notifier=observe_committed_state,
+	).run("terminal-wake-job", "/dev/mock", {"approved": True}, False)
+
+	assert wakeups == [
+		("PROFILING", "PROFILING"),
+		("POLICY_SELECTED", "POLICY_SELECTED"),
+		("RUNNING", "RUNNING"),
+		("VERIFYING", "VERIFYING"),
+		("VERIFIED", "VERIFIED"),
+	]
 
 
 def test_verified_requires_verified_result_and_other_terminals_persist(tmp_path):
@@ -387,12 +467,17 @@ def test_local_audit_api_projects_ordered_job_events_and_filters_unrelated_jobs(
 
 
 def test_real_hdd_bytes_and_firmware_indeterminate_progress(tmp_path):
-	client, _agent, executor = _client(tmp_path, agent=StubAgent(method="HDD_OVERWRITE"))
+	blocking_hdd = BlockingAgent(method="HDD_OVERWRITE")
+	client, _agent, _executor = _client(tmp_path, agent=blocking_hdd, executor=None)
+	client.app.state.worker_executor = ThreadExecutorAdapter()
 	with client:
 		accepted = _submit(client, dry_run=False).json()
-		executor.run_next()
+		assert blocking_hdd.started.wait(timeout=2)
 		hdd = client.get(f"/jobs/{accepted['local_job_id']}").json()
-	assert {"kind": "bytes", "bytes_completed": 512, "bytes_total": 1024} in [
+		blocking_hdd.release.set()
+		_wait_terminal(client, accepted["local_job_id"])
+	assert hdd["progress"] == {"kind": "bytes", "bytes_completed": 512, "bytes_total": 1024}
+	assert {"kind": "bytes", "bytes_completed": 512, "bytes_total": 1024} not in [
 		event["progress"] for event in hdd["state_history"]
 	]
 
