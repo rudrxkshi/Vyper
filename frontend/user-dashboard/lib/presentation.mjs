@@ -38,6 +38,53 @@ export function getJobStateMeta(status) {
   };
 }
 
+const PIPELINE_STAGE_DEFINITIONS = [
+  ["PROFILING", "Profiling"],
+  ["POLICY", "Policy"],
+  ["EXECUTION", "Execution"],
+  ["VERIFICATION", "Verification"],
+  ["EVIDENCE", "Evidence"],
+  ["CERTIFICATE", "Certificate"],
+];
+
+function historyState(event) {
+  return typeof event === "string" ? event : event?.state;
+}
+
+export function getPipelinePresentation(history = [], jobState = "PENDING") {
+  const stages = PIPELINE_STAGE_DEFINITIONS.map(([key, label]) => ({ key, label, status: "pending" }));
+  const states = (Array.isArray(history) ? history : []).map(historyState).filter(Boolean);
+  const milestoneStates = states.filter((state) => String(state).startsWith("STAGE_"));
+
+  if (milestoneStates.length) {
+    for (const state of milestoneStates) {
+      const match = /^STAGE_(PROFILING|POLICY|EXECUTION|VERIFICATION|EVIDENCE|CERTIFICATE)_(STARTED|COMPLETED|FAILED)$/.exec(state);
+      if (!match) continue;
+      const stage = stages.find((item) => item.key === match[1]);
+      if (!stage) continue;
+      if (match[2] === "STARTED" && stage.status === "pending") stage.status = "current";
+      if (match[2] === "COMPLETED") stage.status = "done";
+      if (match[2] === "FAILED") stage.status = "bad";
+    }
+    return stages;
+  }
+
+  // Historical jobs have coarse persisted lifecycle events. Keep that limited
+  // fallback progressive, but never synthesize all stages from a terminal state.
+  const coarseOrder = { PROFILING: 0, POLICY_SELECTED: 1, RUNNING: 2, VERIFYING: 3 };
+  const coarseStates = states.filter((state) => Object.hasOwn(coarseOrder, state));
+  const activeState = coarseStates.at(-1) || (Object.hasOwn(coarseOrder, jobState) ? jobState : null);
+  if (activeState) {
+    const activeIndex = coarseOrder[activeState];
+    stages.forEach((stage, index) => {
+      if (index < activeIndex) stage.status = "done";
+      else if (index === activeIndex) stage.status = "current";
+    });
+    if (["FAILED", "UNSUPPORTED"].includes(jobState)) stages[activeIndex].status = "bad";
+  }
+  return stages;
+}
+
 export function getFinalStatusMeta(status) {
   if (!status) return { tone: "pend", label: "—", successful: false };
   return FINAL_STATUS_META[status] || {
@@ -222,6 +269,8 @@ export function normalizeRemoteAgent(agent) {
 
 export function normalizeCentralJob(job) {
   const result = job?.result || {};
+  const resultHistory = Array.isArray(result.state_history) ? result.state_history : [];
+  const eventHistory = Array.isArray(job?.events) ? job.events : [];
   return {
     ...job,
     id: job?.central_job_id,
@@ -233,7 +282,7 @@ export function normalizeCentralJob(job) {
     execution_json: result.execution ?? null,
     verification_json: result.verification ?? null,
     evidence_json: result.evidence ?? null,
-    state_history_json: result.state_history || job?.events || [],
+    state_history_json: resultHistory.length ? resultHistory : eventHistory,
     error_json: result.error ?? null,
     certificate: result.certificate ?? null,
     waiting_local_approval: job?.status === "WAITING_LOCAL_APPROVAL",

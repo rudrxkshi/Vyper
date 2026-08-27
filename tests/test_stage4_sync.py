@@ -657,6 +657,38 @@ def test_progress_events_are_monotonic_idempotent_and_do_not_create_verified(tmp
 	assert stored["final_status"] is None
 
 
+def test_central_persists_intermediate_pipeline_events_without_replacing_execution_state(tmp_path):
+	with _central_client(tmp_path) as client:
+		_enrolled, headers, _asset, job = _prepare_agent_asset_job(client, dry_run=True)
+		payloads = [
+			{"sequence": 1, "state": "STAGE_PROFILING_STARTED", "message": "Profiling started."},
+			{"sequence": 2, "state": "STAGE_PROFILING_COMPLETED", "message": "Profiling completed."},
+			{"sequence": 3, "state": "STAGE_POLICY_STARTED", "message": "Policy started."},
+		]
+		for payload in payloads:
+			response = client.post(
+				f"/agent/jobs/{job['central_job_id']}/events", headers=headers,
+				json={
+					"agent_protocol_version": "1", "local_job_id": "local-stage-job",
+					"timestamp": f"2026-08-24T10:00:0{payload['sequence']}Z", "progress": None, **payload,
+				},
+			)
+			assert response.status_code == 200
+		duplicate = client.post(
+			f"/agent/jobs/{job['central_job_id']}/events", headers=headers,
+			json={
+				"agent_protocol_version": "1", "local_job_id": "local-stage-job",
+				"timestamp": "2026-08-24T10:00:01Z", "progress": None, **payloads[0],
+			},
+		)
+		stored = next(item for item in client.get("/central-jobs").json() if item["central_job_id"] == job["central_job_id"])
+
+	assert duplicate.json()["duplicate"] is True
+	assert [event["state"] for event in stored["events"]] == [item["state"] for item in payloads]
+	assert not str(stored["local_execution_state"] or "").startswith("STAGE_")
+	assert stored["final_status"] is None
+
+
 def _verified_result(local_job_id="local-1"):
 	profile = DeviceProfile(device_path="/dev/sdb", device_type="HDD", model="Mock Disk",
 		serial_number="SER-1", size_bytes=1000, interface="ATA", transport="SATA", is_system_device=False)
@@ -1037,6 +1069,42 @@ def test_queued_job_result_payload_and_outbox_share_result_idempotency_key(tmp_p
 	expected = f"result:{central_job_id}"
 	assert result["idempotency_key"] == expected
 	assert result["payload"]["idempotency_key"] == expected
+
+
+def test_intermediate_pipeline_events_queue_once_with_sequence_idempotency(tmp_path):
+	store = LocalJobStore(tmp_path / "pipeline-sync.db")
+	local_job_id = "local-pipeline-1"
+	central_job_id = "central-pipeline-1"
+	store.create_job(
+		local_job_id=local_job_id, api_version="2", target="/dev/mock", dry_run=False,
+		authorization_metadata={"approved": True},
+	)
+	store.start_job(local_job_id, 1234)
+	store.record_event_once(local_job_id, "STAGE_PROFILING_STARTED", "Profiling started.")
+	store.record_event_once(local_job_id, "STAGE_PROFILING_COMPLETED", "Profiling completed.")
+	store.record_event_once(local_job_id, "STAGE_POLICY_STARTED", "Policy started.")
+	store.save_remote_request({
+		"central_job_id": central_job_id, "target_identity": "fixture-identity", "requested_target": "/dev/mock",
+		"dry_run": False, "authorization_policy": {"central_approved": True},
+		"expires_at": "2999-01-01T00:00:00Z", "idempotency_key": "remote-pipeline-1", "nonce": "pipeline-nonce",
+	})
+	assert store.map_remote_job(central_job_id, local_job_id, local_approved=True) is True
+	credential_store = AgentCredentialStore(tmp_path / "credential.json")
+	credential_store.save({"agent_id": "agent-1", "agent_token": "fixture-token", "agent_protocol_version": "1"})
+	sync = CentralSyncClient(
+		central_url="http://central.test", credential_store=credential_store, job_store=store,
+		discovery=DiscoveryStub([]), submit_local_job=lambda **kwargs: local_job_id,
+	)
+
+	first_count = sync.queue_job_updates()
+	second_count = sync.queue_job_updates()
+	queued = [item for item in store.due_outbox(now="9999-12-31T00:00:00Z") if item["kind"] == "job_event"]
+	stage_states = [item["payload"]["state"] for item in queued if item["payload"]["state"].startswith("STAGE_")]
+
+	assert first_count == len(queued)
+	assert second_count == 0
+	assert stage_states == ["STAGE_PROFILING_STARTED", "STAGE_PROFILING_COMPLETED", "STAGE_POLICY_STARTED"]
+	assert len({item["idempotency_key"] for item in queued}) == len(queued)
 
 
 def test_sync_loop_isolates_poll_failure_and_continues_flushing_and_iterating(caplog, monkeypatch):

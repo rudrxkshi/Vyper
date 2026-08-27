@@ -11,8 +11,10 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID, uuid4
+
+from fastapi.encoders import jsonable_encoder
 
 from agent.agent import VYPERAgent
 from agent.discovery import DeviceDiscovery
@@ -76,7 +78,16 @@ class PrivilegedExecutor:
 		self._targets: set[str] = set()
 		self._lock = threading.Lock()
 
-	def dispatch(self, raw: bytes, *, peer_uid: int | None = None, peer_gid: int | None = None) -> dict[str, Any]:
+	def dispatch(
+		self,
+		raw: bytes,
+		*,
+		peer_uid: int | None = None,
+		peer_gid: int | None = None,
+		event_callback: Callable[[Any], None] | None = None,
+		stage_callback: Callable[[str], None] | None = None,
+		progress_callback: Callable[[Any], None] | None = None,
+	) -> dict[str, Any]:
 		if len(raw) > MAX_REQUEST_BYTES:
 			raise ExecutorProtocolError("Executor request exceeds the size limit.")
 		try:
@@ -102,8 +113,14 @@ class PrivilegedExecutor:
 			self._targets.add(target)
 		try:
 			effective_dry_run = bool(request["dry_run"]) or self.dry_run_only
-			result = VYPERAgent(dry_run=effective_dry_run).sanitize_device(target,
-				authorization=request["authorization"], dry_run=effective_dry_run)
+			result = VYPERAgent(dry_run=effective_dry_run).sanitize_device(
+				target,
+				authorization=request["authorization"],
+				dry_run=effective_dry_run,
+				event_callback=event_callback,
+				stage_callback=stage_callback,
+				progress_callback=progress_callback,
+			)
 			payload = result_payload(result)
 			execution = payload.get("execution") if isinstance(payload, dict) else None
 			policy = payload.get("policy") if isinstance(payload, dict) else None
@@ -131,10 +148,35 @@ class PrivilegedExecutorClient:
 	def __init__(self, socket_path: str | Path, *, timeout: float = 30.0, execution_mode: str = "normal_local") -> None:
 		self.socket_path = str(socket_path); self.timeout = timeout; self.execution_mode = execution_mode
 
-	def sanitize_device(self, target: str, authorization: dict[str, Any], dry_run: bool = False, **_kwargs) -> dict[str, Any]:
-		return self.request("sanitize", target=target, dry_run=bool(dry_run), authorization=dict(authorization))
+	def sanitize_device(
+		self,
+		target: str,
+		authorization: dict[str, Any],
+		dry_run: bool = False,
+		*,
+		event_callback: Callable[[Any], None] | None = None,
+		stage_callback: Callable[[str], None] | None = None,
+		progress_callback: Callable[[Any], None] | None = None,
+	) -> dict[str, Any]:
+		return self.request(
+			"sanitize",
+			target=target,
+			dry_run=bool(dry_run),
+			authorization=dict(authorization),
+			event_callback=event_callback,
+			stage_callback=stage_callback,
+			progress_callback=progress_callback,
+		)
 
-	def request(self, operation: str, **fields: Any) -> Any:
+	def request(
+		self,
+		operation: str,
+		*,
+		event_callback: Callable[[Any], None] | None = None,
+		stage_callback: Callable[[str], None] | None = None,
+		progress_callback: Callable[[Any], None] | None = None,
+		**fields: Any,
+	) -> Any:
 		payload = {"version": PROTOCOL_VERSION, "request_id": str(uuid4()), "operation": operation,
 			"execution_mode": self.execution_mode, **fields}
 		data = json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n"
@@ -145,15 +187,47 @@ class PrivilegedExecutorClient:
 			if operation == "sanitize":
 				client.settimeout(None)
 			response = bytearray()
-			while b"\n" not in response:
+			while True:
 				chunk = client.recv(8192)
 				if not chunk or len(response) + len(chunk) > MAX_REQUEST_BYTES:
 					raise ExecutorProtocolError("Invalid executor response.")
 				response.extend(chunk)
-		decoded = json.loads(bytes(response).split(b"\n", 1)[0])
-		if decoded.get("error"):
-			raise ExecutorProtocolError(str(decoded["error"]))
-		return decoded.get("result")
+				while b"\n" in response:
+					line, remainder = bytes(response).split(b"\n", 1)
+					response = bytearray(remainder)
+					decoded = json.loads(line)
+					if "event" in decoded:
+						self._deliver_event(
+							decoded["event"],
+							event_callback=event_callback,
+							stage_callback=stage_callback,
+							progress_callback=progress_callback,
+						)
+						continue
+					if decoded.get("error"):
+						raise ExecutorProtocolError(str(decoded["error"]))
+					return decoded.get("result")
+
+	@staticmethod
+	def _deliver_event(
+		event: Any,
+		*,
+		event_callback: Callable[[Any], None] | None,
+		stage_callback: Callable[[str], None] | None,
+		progress_callback: Callable[[Any], None] | None,
+	) -> None:
+		if not isinstance(event, dict):
+			raise ExecutorProtocolError("Malformed executor event frame.")
+		kind = event.get("kind")
+		value = event.get("value")
+		callback = {"state": event_callback, "stage": stage_callback, "progress": progress_callback}.get(kind)
+		if kind not in {"state", "stage", "progress"}:
+			raise ExecutorProtocolError("Unknown executor event frame.")
+		if callback is not None:
+			try:
+				callback(value)
+			except Exception as exc:
+				logger.warning("Executor event callback failed kind=%s exception=%s", kind, type(exc).__name__)
 
 
 def peer_credentials(connection: socket.socket) -> tuple[int | None, int | None]:
@@ -178,6 +252,10 @@ def _send_response(connection: socket.socket, response: dict[str, Any]) -> bool:
 	return True
 
 
+def _send_event(connection: socket.socket, kind: str, value: Any) -> None:
+	_send_response(connection, {"version": PROTOCOL_VERSION, "event": {"kind": kind, "value": jsonable_encoder(value)}})
+
+
 def serve(socket_path: str | Path, *, group_gid: int | None = None, dry_run_only: bool = False) -> None:
 	path = Path(socket_path)
 	path.parent.mkdir(parents=True, exist_ok=True); os.chmod(path.parent, 0o750)
@@ -198,7 +276,14 @@ def serve(socket_path: str | Path, *, group_gid: int | None = None, dry_run_only
 					if not chunk: break
 					raw.extend(chunk)
 				try:
-					response = executor.dispatch(bytes(raw).split(b"\n", 1)[0], peer_uid=uid, peer_gid=gid)
+					response = executor.dispatch(
+						bytes(raw).split(b"\n", 1)[0],
+						peer_uid=uid,
+						peer_gid=gid,
+						event_callback=lambda state: _send_event(connection, "state", getattr(state, "value", state)),
+						stage_callback=lambda event: _send_event(connection, "stage", event),
+						progress_callback=lambda progress: _send_event(connection, "progress", progress),
+					)
 				except Exception as exc:
 					response = {"version": PROTOCOL_VERSION, "error": f"{type(exc).__name__}: {exc}"}
 				_send_response(connection, response)

@@ -852,8 +852,10 @@ def upload_event(central_job_id: str, payload: AgentJobEventUpload, agent: Agent
 		message=payload.message, progress_json=payload.progress,
 	))
 	job.local_job_id = payload.local_job_id
-	job.local_execution_state = payload.state
-	job.progress_json = payload.progress
+	is_pipeline_stage = payload.state.startswith("STAGE_")
+	if not is_pipeline_stage:
+		job.local_execution_state = payload.state
+		job.progress_json = payload.progress
 	job.updated_at = utc_now()
 	if payload.state == "RUNNING":
 		job.status = "RUNNING"

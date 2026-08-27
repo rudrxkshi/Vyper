@@ -248,6 +248,32 @@ class LocalJobStore:
 			return
 		self.transition(local_job_id, job["job_state"], "Measured progress update.", progress=progress)
 
+	def record_event_once(
+		self,
+		local_job_id: str,
+		state: str,
+		message: str,
+		*,
+		progress: dict[str, Any] | None = None,
+	) -> dict[str, Any] | None:
+		"""Append an immutable lifecycle milestone without changing job state."""
+		now = utc_now()
+		with self._connect() as connection:
+			connection.execute("BEGIN IMMEDIATE")
+			job = connection.execute(
+				"SELECT 1 FROM local_jobs WHERE local_job_id = ?", (local_job_id,),
+			).fetchone()
+			if job is None:
+				return None
+			existing = connection.execute(
+				"SELECT 1 FROM local_job_events WHERE local_job_id = ? AND state = ? LIMIT 1",
+				(local_job_id, state),
+			).fetchone()
+			if existing is not None:
+				return None
+			self._append_event(connection, local_job_id, state, message, progress, now)
+		return self.get_job(local_job_id)
+
 	def complete(self, local_job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 		state = str(payload["job_state"])
 		final_status = payload.get("final_status")

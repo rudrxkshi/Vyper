@@ -51,6 +51,11 @@ class _ObservableStateHistory(list[JobState]):
             self.append(state)
 
 
+def _emit_pipeline_stage(callback: Callable[[str], None] | None, stage: str, phase: str) -> None:
+    if callback is not None:
+        callback(f"STAGE_{stage}_{phase}")
+
+
 class VYPERAgent:
     def __init__(
         self,
@@ -91,6 +96,7 @@ class VYPERAgent:
         dry_run: bool | None = None,
         *,
         event_callback: Callable[[JobState], None] | None = None,
+        stage_callback: Callable[[str], None] | None = None,
         progress_callback: Callable[[Any], None] | None = None,
     ) -> OrchestrationJobResult:
         effective_dry_run = self.dry_run if dry_run is None else bool(dry_run)
@@ -147,12 +153,14 @@ class VYPERAgent:
             )
 
         cleaned_target = str(target).strip()
+        _emit_pipeline_stage(stage_callback, "PROFILING", "STARTED")
         state_history.append(JobState.PROFILING)
         started_at = now_iso
 
         try:
             profile = self.profiler.profile(cleaned_target)
         except Exception as exc:
+            _emit_pipeline_stage(stage_callback, "PROFILING", "FAILED")
             execution = SanitizationResult(
                 status=SanitizationStatus.FAILED,
                 target_device=cleaned_target,
@@ -190,6 +198,8 @@ class VYPERAgent:
                 message="Profiling failed.",
             )
 
+        _emit_pipeline_stage(stage_callback, "PROFILING", "COMPLETED")
+        _emit_pipeline_stage(stage_callback, "POLICY", "STARTED")
         if profile.device_type == "UNKNOWN" or profile.errors:
             status = SanitizationStatus.UNSUPPORTED if profile.device_type == "UNKNOWN" else SanitizationStatus.FAILED
             terminal_state = JobState.UNSUPPORTED if status == SanitizationStatus.UNSUPPORTED else JobState.FAILED
@@ -216,6 +226,7 @@ class VYPERAgent:
                 limitations=["A supported pathway cannot be selected without sufficient profile confidence."],
                 metadata={"profile_errors": list(profile.errors)},
             )
+            _emit_pipeline_stage(stage_callback, "POLICY", "COMPLETED")
             state_history.extend([JobState.POLICY_SELECTED, terminal_state])
             evidence = self._build_evidence(profile, policy, execution, verification, started_at=started_at, completed_at=now_iso)
             certificate = self.certificate_builder.build(evidence)
@@ -235,6 +246,7 @@ class VYPERAgent:
         try:
             policy = self.policy_engine.decide(profile=profile)
         except Exception as exc:
+            _emit_pipeline_stage(stage_callback, "POLICY", "FAILED")
             execution = SanitizationResult(
                 status=SanitizationStatus.FAILED,
                 target_device=cleaned_target,
@@ -273,6 +285,7 @@ class VYPERAgent:
                 message="Policy evaluation failed.",
             )
 
+        _emit_pipeline_stage(stage_callback, "POLICY", "COMPLETED")
         state_history.append(JobState.POLICY_SELECTED)
 
         if policy.unsupported or not policy.selected_pathway:
@@ -459,41 +472,78 @@ class VYPERAgent:
                 message="Authorization required.",
             )
 
+        _emit_pipeline_stage(stage_callback, "EXECUTION", "STARTED")
         state_history.append(JobState.RUNNING)
-        execution = self._run_pathway(
-            pathway_name=pathway_name,
-            pathway=pathway,
-            target=cleaned_target,
-            profile=profile,
-            authorized=True if effective_dry_run else authorized,
-            ata_password=ata_password,
-        )
+        try:
+            execution = self._run_pathway(
+                pathway_name=pathway_name,
+                pathway=pathway,
+                target=cleaned_target,
+                profile=profile,
+                authorized=True if effective_dry_run else authorized,
+                ata_password=ata_password,
+            )
+        except Exception:
+            _emit_pipeline_stage(stage_callback, "EXECUTION", "FAILED")
+            raise
+
+        execution_completed = execution.status in {SanitizationStatus.RUNNING, SanitizationStatus.VERIFIED}
+        _emit_pipeline_stage(stage_callback, "EXECUTION", "COMPLETED" if execution_completed else "FAILED")
 
         state_history.append(JobState.VERIFYING)
-        if effective_dry_run:
-            verification = self._verification_placeholder(
-                target=cleaned_target,
-                pathway=pathway_name,
-                status=SanitizationStatus.INCONCLUSIVE,
-                verified=False,
-                message="Dry-run execution does not provide verification evidence.",
-                limitations=["Dry-run mode intentionally avoids destructive operations and verification claims."],
-            )
-        elif execution.status in {SanitizationStatus.RUNNING, SanitizationStatus.VERIFIED}:
-            verification = self.verifier.verify(device=cleaned_target, pathway=pathway_name, profile=profile, sanitization_result=execution)
-        else:
-            verification = self._verification_placeholder(
-                target=cleaned_target,
-                pathway=pathway_name,
-                status=SanitizationStatus.INCONCLUSIVE,
-                verified=False,
-                message="Verification skipped because execution did not complete successfully.",
-                warnings=["Execution did not reach a verifiable completion state."],
-            )
+        if execution_completed:
+            _emit_pipeline_stage(stage_callback, "VERIFICATION", "STARTED")
+        try:
+            if effective_dry_run:
+                verification = self._verification_placeholder(
+                    target=cleaned_target,
+                    pathway=pathway_name,
+                    status=SanitizationStatus.INCONCLUSIVE,
+                    verified=False,
+                    message="Dry-run execution does not provide verification evidence.",
+                    limitations=["Dry-run mode intentionally avoids destructive operations and verification claims."],
+                )
+            elif execution_completed:
+                verification = self.verifier.verify(device=cleaned_target, pathway=pathway_name, profile=profile, sanitization_result=execution)
+            else:
+                verification = self._verification_placeholder(
+                    target=cleaned_target,
+                    pathway=pathway_name,
+                    status=SanitizationStatus.INCONCLUSIVE,
+                    verified=False,
+                    message="Verification skipped because execution did not complete successfully.",
+                    warnings=["Execution did not reach a verifiable completion state."],
+                )
+        except Exception:
+            if execution_completed:
+                _emit_pipeline_stage(stage_callback, "VERIFICATION", "FAILED")
+            raise
+
+        verification_completed = bool(verification.verified and verification.status == SanitizationStatus.VERIFIED)
+        if execution_completed:
+            _emit_pipeline_stage(stage_callback, "VERIFICATION", "COMPLETED" if verification_completed else "FAILED")
 
         completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        evidence = self._build_evidence(profile, policy, execution, verification, started_at=started_at, completed_at=completed_at)
-        certificate = self.certificate_builder.build(evidence)
+        if verification_completed:
+            _emit_pipeline_stage(stage_callback, "EVIDENCE", "STARTED")
+        try:
+            evidence = self._build_evidence(profile, policy, execution, verification, started_at=started_at, completed_at=completed_at)
+        except Exception:
+            if verification_completed:
+                _emit_pipeline_stage(stage_callback, "EVIDENCE", "FAILED")
+            raise
+        if verification_completed:
+            _emit_pipeline_stage(stage_callback, "EVIDENCE", "COMPLETED")
+            _emit_pipeline_stage(stage_callback, "CERTIFICATE", "STARTED")
+        try:
+            certificate = self.certificate_builder.build(evidence)
+        except Exception:
+            if verification_completed:
+                _emit_pipeline_stage(stage_callback, "CERTIFICATE", "FAILED")
+            raise
+        if verification_completed:
+            certificate_completed = bool(certificate.successful_sanitization_claim)
+            _emit_pipeline_stage(stage_callback, "CERTIFICATE", "COMPLETED" if certificate_completed else "FAILED")
 
         final_status = evidence.final_status
         if final_status == SanitizationStatus.VERIFIED.value:

@@ -29,6 +29,7 @@ import {
   getDeviceProtection,
   getFinalStatusMeta,
   getJobStateMeta,
+  getPipelinePresentation,
   getProgressPresentation,
   mountedPartitionsText,
   normalizeDiscoveredDevices,
@@ -43,7 +44,6 @@ import { selectLinuxX64Release } from "../lib/downloads.mjs";
 import DownloadsContent from "./downloads-content";
 
 const PRODUCT_VERSION = "1.0.0-rc1";
-const STAGES = ["Profiling", "Policy", "Execution", "Verification", "Evidence", "Certificate"];
 const TERMINAL_JOB_STATES = new Set(["VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED"]);
 
 function newDashboardIdempotencyKey() {
@@ -86,23 +86,19 @@ function JsonPanel({ title, json, defaultOpen }) {
     </div>
   );
 }
-function Pipeline({ jobState }) {
-  const meta = getJobStateMeta(jobState);
-  const failedAt = jobState === "FAILED" || jobState === "UNSUPPORTED" ? meta.stage : -1;
+function Pipeline({ jobState, eventHistory }) {
+  const stages = getPipelinePresentation(eventHistory, jobState);
   return (
     <div className="nb-pipeline">
-      {STAGES.map((label, i) => {
-        let cls = "pend";
-        if (failedAt === i) cls = "bad";
-        else if (i < meta.stage || meta.successful) cls = "done";
-        else if (i === meta.stage) cls = "current";
+      {stages.map((stage, i) => {
+        const cls = stage.status === "pending" ? "pend" : stage.status;
         return (
-          <div className={"nb-pstep nb-pstep-" + cls} key={label}>
+          <div className={"nb-pstep nb-pstep-" + cls} key={stage.key}>
             <div className="nb-pstep-line" />
             <div className="nb-pstep-circle">
               {cls === "done" ? <Check size={14} /> : cls === "bad" ? <X size={14} /> : i + 1}
             </div>
-            <div className="nb-pstep-label">{label}</div>
+            <div className="nb-pstep-label">{stage.label}</div>
           </div>
         );
       })}
@@ -1077,7 +1073,7 @@ export default function VyperDashboard() {
               <p className="nb-sub">Full pipeline state chain. Success is treated as non-final until verification and a certificate exist.</p>
               <div className="nb-card">
                 <div className="nb-section-title">Pipeline state</div>
-                <Pipeline jobState={selectedJob.job_state} />
+                <Pipeline jobState={selectedJob.job_state} eventHistory={selectedJob.state_history_json} />
                 <div className="nb-callout" style={{ marginTop: 12 }}>
                   <b>job_state:</b> {selectedJob.job_state} &nbsp; · &nbsp; <b>final_status:</b> {selectedJob.final_status || "not yet set"} &nbsp; · &nbsp; <b>dry_run:</b> {String(selectedJob.dry_run)}
                 </div>

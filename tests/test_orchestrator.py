@@ -120,12 +120,23 @@ def test_successful_hdd_workflow():
     agent = VYPERAgent(profiler=profiler, policy_engine=policy, verifier=verifier)
     agent._resolve_pathway = lambda pathway_name, dry_run: DummyPathway(_execution_result(SanitizationStatus.RUNNING, "HDD_OVERWRITE"), calls)
 
-    result = agent.sanitize_device("/dev/sdx", authorization={"approved": True}, dry_run=False)
+    stages = []
+    result = agent.sanitize_device(
+        "/dev/sdx", authorization={"approved": True}, dry_run=False, stage_callback=stages.append,
+    )
 
     assert result.job_state == JobState.VERIFIED
     assert result.evidence is not None and result.evidence.final_status == "VERIFIED"
     assert result.certificate is not None and result.certificate.successful_sanitization_claim is True
     assert calls
+    assert stages == [
+        "STAGE_PROFILING_STARTED", "STAGE_PROFILING_COMPLETED",
+        "STAGE_POLICY_STARTED", "STAGE_POLICY_COMPLETED",
+        "STAGE_EXECUTION_STARTED", "STAGE_EXECUTION_COMPLETED",
+        "STAGE_VERIFICATION_STARTED", "STAGE_VERIFICATION_COMPLETED",
+        "STAGE_EVIDENCE_STARTED", "STAGE_EVIDENCE_COMPLETED",
+        "STAGE_CERTIFICATE_STARTED", "STAGE_CERTIFICATE_COMPLETED",
+    ]
 
 
 def test_successful_nvme_crypto_workflow():
@@ -371,10 +382,19 @@ def test_execution_failure():
     agent = VYPERAgent(profiler=profiler, policy_engine=policy, verifier=verifier)
     agent._resolve_pathway = lambda pathway_name, dry_run: DummyPathway(_execution_result(SanitizationStatus.FAILED, "HDD_OVERWRITE"), calls)
 
-    result = agent.sanitize_device("/dev/sdx", authorization={"approved": True}, dry_run=False)
+    stages = []
+    result = agent.sanitize_device(
+        "/dev/sdx", authorization={"approved": True}, dry_run=False, stage_callback=stages.append,
+    )
 
     assert result.job_state == JobState.FAILED
     assert result.evidence is not None and result.evidence.final_status == "FAILED"
+    assert stages == [
+        "STAGE_PROFILING_STARTED", "STAGE_PROFILING_COMPLETED",
+        "STAGE_POLICY_STARTED", "STAGE_POLICY_COMPLETED",
+        "STAGE_EXECUTION_STARTED", "STAGE_EXECUTION_FAILED",
+    ]
+    assert verifier.calls == 0
 
 
 def test_verification_failure():

@@ -26,6 +26,7 @@ import {
   formatBytes,
   getDeviceProtection,
   getFinalStatusMeta,
+  getPipelinePresentation,
   getProgressPresentation,
   mountedPartitionsText,
   normalizeDiscoveredDevices,
@@ -37,6 +38,53 @@ import {
 } from "../lib/presentation.mjs";
 import { loadLocalConsoleData } from "../lib/local-console-data.mjs";
 import { releaseDownloadUrl, selectLinuxX64Release } from "../lib/downloads.mjs";
+
+const pipelineStatuses = (history, jobState = "RUNNING") =>
+  getPipelinePresentation(history.map((state, index) => ({ sequence: index + 1, state })), jobState)
+    .map((stage) => stage.status);
+
+test("pipeline presentation advances only from persisted stage milestones", () => {
+  const events = [];
+  events.push("STAGE_PROFILING_STARTED");
+  assert.deepEqual(pipelineStatuses(events), ["current", "pending", "pending", "pending", "pending", "pending"]);
+  events.push("STAGE_PROFILING_COMPLETED", "STAGE_POLICY_STARTED");
+  assert.deepEqual(pipelineStatuses(events), ["done", "current", "pending", "pending", "pending", "pending"]);
+  events.push("STAGE_POLICY_COMPLETED", "STAGE_EXECUTION_STARTED");
+  assert.deepEqual(pipelineStatuses(events), ["done", "done", "current", "pending", "pending", "pending"]);
+  events.push("STAGE_EXECUTION_COMPLETED", "STAGE_VERIFICATION_STARTED");
+  assert.deepEqual(pipelineStatuses(events), ["done", "done", "done", "current", "pending", "pending"]);
+  events.push("STAGE_VERIFICATION_COMPLETED", "STAGE_EVIDENCE_STARTED");
+  assert.deepEqual(pipelineStatuses(events), ["done", "done", "done", "done", "current", "pending"]);
+  events.push("STAGE_EVIDENCE_COMPLETED", "STAGE_CERTIFICATE_STARTED");
+  assert.deepEqual(pipelineStatuses(events), ["done", "done", "done", "done", "done", "current"]);
+  events.push("STAGE_CERTIFICATE_COMPLETED");
+  assert.deepEqual(pipelineStatuses(events, "VERIFIED"), ["done", "done", "done", "done", "done", "done"]);
+});
+
+test("pipeline failure and terminal state do not synthesize later completion", () => {
+  const failed = [
+    "STAGE_PROFILING_STARTED", "STAGE_PROFILING_COMPLETED",
+    "STAGE_POLICY_STARTED", "STAGE_POLICY_COMPLETED",
+    "STAGE_EXECUTION_STARTED", "STAGE_EXECUTION_FAILED",
+  ];
+  assert.deepEqual(pipelineStatuses(failed, "FAILED"), ["done", "done", "bad", "pending", "pending", "pending"]);
+  assert.deepEqual(pipelineStatuses(["VERIFIED"], "VERIFIED"), ["pending", "pending", "pending", "pending", "pending", "pending"]);
+});
+
+test("central normalization keeps live events when no final result history exists", () => {
+  const events = [{ sequence: 1, state: "STAGE_PROFILING_STARTED" }];
+  const job = normalizeCentralJob({
+    central_job_id: "central-live", requested_target: "/dev/sdb", events,
+    result: { state_history: [] }, local_execution_state: "PROFILING",
+  });
+  assert.deepEqual(job.state_history_json, events);
+});
+
+test("dashboard pipeline receives persisted event history", () => {
+  const source = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  assert.match(source, /eventHistory=\{selectedJob\.state_history_json\}/);
+  assert.doesNotMatch(source, /meta\.successful/);
+});
 
 test("central job detail associates null-job-id audits by central resource while preserving legacy lookup", () => {
   const audits = [

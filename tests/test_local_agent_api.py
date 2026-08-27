@@ -290,6 +290,29 @@ def test_lifecycle_events_are_durable_monotonic_and_dry_run_preserved(tmp_path):
 	assert history[0]["local_job_id"] == accepted["local_job_id"]
 
 
+def test_pipeline_stage_events_persist_once_without_replacing_job_state(tmp_path):
+	store = LocalJobStore(tmp_path / "pipeline-events.db")
+	store.create_job(
+		local_job_id="pipeline-job", api_version="2", target="/dev/mock", dry_run=False,
+		authorization_metadata={"approved": True},
+	)
+	assert store.start_job("pipeline-job", 1234) is True
+	for event in (
+		"STAGE_PROFILING_STARTED", "STAGE_PROFILING_COMPLETED", "STAGE_POLICY_STARTED",
+	):
+		store.record_event_once("pipeline-job", event, f"Recorded {event}.")
+	store.record_event_once("pipeline-job", "STAGE_POLICY_STARTED", "Duplicate retry.")
+
+	job = LocalJobStore(tmp_path / "pipeline-events.db").get_job("pipeline-job")
+	states = [event["state"] for event in job["state_history"]]
+	assert job["job_state"] == "PROFILING"
+	assert states == [
+		"PENDING", "PROFILING", "STAGE_PROFILING_STARTED",
+		"STAGE_PROFILING_COMPLETED", "STAGE_POLICY_STARTED",
+	]
+	assert [event["sequence"] for event in job["state_history"]] == [1, 2, 3, 4, 5]
+
+
 def test_verified_requires_verified_result_and_other_terminals_persist(tmp_path):
 	for index, (state, verified, expected) in enumerate([
 		("VERIFIED", True, "VERIFIED"),

@@ -26,6 +26,26 @@ _STATE_MESSAGES = {
 	"UNSUPPORTED": "Sanitization pathway is unsupported.",
 	"CANCELLED": "Sanitization job was cancelled.",
 }
+_PIPELINE_STAGE_MESSAGES = {
+	"STAGE_PROFILING_STARTED": "Pipeline stage started: Profiling.",
+	"STAGE_PROFILING_COMPLETED": "Pipeline stage completed: Profiling.",
+	"STAGE_PROFILING_FAILED": "Pipeline stage failed: Profiling.",
+	"STAGE_POLICY_STARTED": "Pipeline stage started: Policy.",
+	"STAGE_POLICY_COMPLETED": "Pipeline stage completed: Policy.",
+	"STAGE_POLICY_FAILED": "Pipeline stage failed: Policy.",
+	"STAGE_EXECUTION_STARTED": "Pipeline stage started: Execution.",
+	"STAGE_EXECUTION_COMPLETED": "Pipeline stage completed: Execution.",
+	"STAGE_EXECUTION_FAILED": "Pipeline stage failed: Execution.",
+	"STAGE_VERIFICATION_STARTED": "Pipeline stage started: Verification.",
+	"STAGE_VERIFICATION_COMPLETED": "Pipeline stage completed: Verification.",
+	"STAGE_VERIFICATION_FAILED": "Pipeline stage failed: Verification.",
+	"STAGE_EVIDENCE_STARTED": "Pipeline stage started: Evidence.",
+	"STAGE_EVIDENCE_COMPLETED": "Pipeline stage completed: Evidence.",
+	"STAGE_EVIDENCE_FAILED": "Pipeline stage failed: Evidence.",
+	"STAGE_CERTIFICATE_STARTED": "Pipeline stage started: Certificate.",
+	"STAGE_CERTIFICATE_COMPLETED": "Pipeline stage completed: Certificate.",
+	"STAGE_CERTIFICATE_FAILED": "Pipeline stage failed: Certificate.",
+}
 
 
 def redact(value: Any, secrets: tuple[str, ...] = ()) -> Any:
@@ -126,6 +146,8 @@ class LocalJobWorker:
 			kwargs: dict[str, Any] = {}
 			if supports_events:
 				kwargs["event_callback"] = lambda state: self._state_event(local_job_id, state)
+			if "stage_callback" in parameters:
+				kwargs["stage_callback"] = lambda event: self._stage_event(local_job_id, event)
 			if "progress_callback" in parameters:
 				kwargs["progress_callback"] = lambda progress: self._progress_event(local_job_id, progress)
 			result = self.agent.sanitize_device(
@@ -196,8 +218,8 @@ class LocalJobWorker:
 			)
 
 	def _progress_event(self, local_job_id: str, progress: Any) -> None:
-		bytes_completed = getattr(progress, "bytes_written", None)
-		bytes_total = getattr(progress, "total_bytes", None)
+		bytes_completed = progress.get("bytes_written") if isinstance(progress, dict) else getattr(progress, "bytes_written", None)
+		bytes_total = progress.get("total_bytes") if isinstance(progress, dict) else getattr(progress, "total_bytes", None)
 		if not isinstance(bytes_completed, int) or not isinstance(bytes_total, int) or bytes_total <= 0:
 			return
 		self.store.update_progress(
@@ -208,6 +230,21 @@ class LocalJobWorker:
 				"bytes_total": bytes_total,
 			},
 		)
+
+	def _stage_event(self, local_job_id: str, event: Any) -> None:
+		event_text = str(event)
+		message = _PIPELINE_STAGE_MESSAGES.get(event_text)
+		if message is None:
+			return
+		stored = self.store.record_event_once(local_job_id, event_text, message)
+		if stored is not None:
+			log_job(
+				"pipeline_stage",
+				local_job_id=local_job_id,
+				target=stored["target"],
+				stage_event=event_text,
+				event_sequence=stored["state_history"][-1]["sequence"],
+			)
 
 	def _import_state_history(self, local_job_id: str, states: list[Any]) -> None:
 		for state in states:

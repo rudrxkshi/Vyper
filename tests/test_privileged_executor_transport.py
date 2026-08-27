@@ -31,6 +31,26 @@ def test_sanitize_response_wait_does_not_use_short_operation_timeout(monkeypatch
 	assert client_socket.timeouts == [30.0, None]
 
 
+def test_sanitize_streams_state_stage_and_progress_before_final_result(monkeypatch):
+	client_socket = FakeSocket(response=(
+		b'{"event":{"kind":"state","value":"RUNNING"}}\n'
+		b'{"event":{"kind":"stage","value":"STAGE_EXECUTION_STARTED"}}\n'
+		b'{"event":{"kind":"progress","value":{"bytes_written":512,"total_bytes":1024}}}\n'
+		b'{"result":{"final_status":"VERIFIED"}}\n'
+	))
+	monkeypatch.setattr("local_agent.privileged_executor.socket.AF_UNIX", 1, raising=False)
+	monkeypatch.setattr("local_agent.privileged_executor.socket.socket", lambda *_args: client_socket)
+	states, stages, progress = [], [], []
+	result = PrivilegedExecutorClient("/run/vyper/executor.sock").sanitize_device(
+		"/dev/mock", {"approved": True}, dry_run=False,
+		event_callback=states.append, stage_callback=stages.append, progress_callback=progress.append,
+	)
+	assert result["final_status"] == "VERIFIED"
+	assert states == ["RUNNING"]
+	assert stages == ["STAGE_EXECUTION_STARTED"]
+	assert progress == [{"bytes_written": 512, "total_bytes": 1024}]
+
+
 def test_short_executor_request_retains_bounded_timeout(monkeypatch):
 	client_socket = FakeSocket()
 	monkeypatch.setattr("local_agent.privileged_executor.socket.AF_UNIX", 1, raising=False)
