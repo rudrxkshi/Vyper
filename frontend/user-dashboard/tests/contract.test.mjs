@@ -615,6 +615,25 @@ test("download metadata is loaded from the central release endpoint", async () =
   assert.equal(fixture.some((item) => item.platform === "windows"), false);
 });
 
+test("new pending remote requests survive refresh beside older submitted requests", async () => {
+  const older = { central_job_id: "older", status: "SUBMITTED", local_job_id: "local-old" };
+  const pending = { central_job_id: "new", status: "WAITING_LOCAL_APPROVAL", local_job_id: null, dry_run: false };
+  const localData = await loadLocalConsoleData({
+    listDevices: async () => [],
+    listJobs: async () => [],
+    listCertificates: async () => [],
+    listAuditLogs: async () => [],
+    listRemoteJobs: async () => [pending, older],
+    getSyncStatus: async () => ({ configured: true }),
+  });
+
+  assert.deepEqual(localData.remoteRequests, [pending, older]);
+  assert.equal(localData.remoteRequests[0].status, "WAITING_LOCAL_APPROVAL");
+  const source = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  assert.match(source, /setInterval\(\(\) => refreshDashboardData\(\), 8000\)/);
+  assert.match(source, /request\.status === "WAITING_LOCAL_APPROVAL"/);
+});
+
 test("dashboard downloads use the central Linux artifact contract without leaving the shell", () => {
   const releases = [
     { platform: "windows", architecture: "x86_64", download_url: "/downloads/windows.zip" },

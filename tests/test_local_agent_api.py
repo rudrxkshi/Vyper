@@ -237,6 +237,28 @@ def test_health_devices_and_cors(tmp_path):
 	assert cors.headers["access-control-allow-origin"] == "http://127.0.0.1:3000"
 
 
+def test_remote_requests_alias_exposes_new_pending_request_ahead_of_older_submitted(tmp_path):
+	client, _agent, _executor = _client(tmp_path)
+	with client:
+		base = {
+			"target_identity": "fixture-identity", "requested_target": "/dev/sdb", "dry_run": False,
+			"authorization_policy": {"central_approved": True}, "expires_at": "2999-01-01T00:00:00Z",
+			"nonce": "fixture-nonce",
+		}
+		client.app.state.job_store.save_remote_request({
+			**base, "central_job_id": "older-submitted", "idempotency_key": "older-request",
+		})
+		client.app.state.job_store.map_remote_job("older-submitted", "local-old", local_approved=True)
+		client.app.state.job_store.save_remote_request({
+			**base, "central_job_id": "new-pending", "idempotency_key": "new-request", "nonce": "new-nonce",
+		})
+		response = client.get("/remote-requests")
+	assert response.status_code == 200
+	assert [item["central_job_id"] for item in response.json()] == ["new-pending", "older-submitted"]
+	assert response.json()[0]["status"] == "WAITING_LOCAL_APPROVAL"
+	assert response.json()[0]["local_approved"] is False
+
+
 def test_post_returns_202_and_persists_pending_before_execution(tmp_path):
 	client, agent, executor = _client(tmp_path)
 	with client:

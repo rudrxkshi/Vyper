@@ -747,6 +747,20 @@ def claim_next_job(response: Response, agent: AgentRecord = Depends(authenticate
 		job.updated_at = now
 		record_audit_event(db, actor="system", action="CENTRAL_JOB_EXPIRED", resource=f"central-job:{job.central_job_id}", metadata={"reason": "claim_window_expired"}, organization_id=job.organization_id)
 		record_security_event(db, event_type="CENTRAL_JOB_EXPIRED", severity="WARNING", actor="system", resource=f"central-job:{job.central_job_id}", central_job_id=job.central_job_id, metadata={"reason": "claim_window_expired"}, organization_id=job.organization_id)
+	# Replay assignments that were returned but never durably acknowledged by the
+	# endpoint. This also recovers pre-acknowledgement WAITING_LOCAL_APPROVAL rows.
+	job = db.execute(select(CentralJobRecord).where(
+		CentralJobRecord.agent_id == agent.agent_id,
+		CentralJobRecord.status.in_(("CLAIMED", "WAITING_LOCAL_APPROVAL")),
+		CentralJobRecord.local_execution_state.is_(None),
+		CentralJobRecord.expires_at > now,
+	).order_by(CentralJobRecord.claimed_at, CentralJobRecord.created_at)).scalars().first()
+	if job is not None:
+		if job.command_json is None:
+			job.command_json = _signed_command(job, issued_at=job.claimed_at or now)
+			db.commit()
+			db.refresh(job)
+		return _job_assignment(job)
 	job = db.execute(select(CentralJobRecord).where(
 		CentralJobRecord.agent_id == agent.agent_id, CentralJobRecord.status == "QUEUED", CentralJobRecord.expires_at > now,
 	).order_by(CentralJobRecord.created_at)).scalars().first()
@@ -754,11 +768,9 @@ def claim_next_job(response: Response, agent: AgentRecord = Depends(authenticate
 		db.commit()
 		response.status_code = status.HTTP_204_NO_CONTENT
 		return None
-	execution_mode = (job.request_json or {}).get("execution_mode", "normal_local")
-	claimed_status = "WAITING_LOCAL_APPROVAL" if execution_mode == "boot_sanitize" or not job.dry_run else "CLAIMED"
 	updated = db.execute(update(CentralJobRecord).where(
 		CentralJobRecord.central_job_id == job.central_job_id, CentralJobRecord.status == "QUEUED",
-	).values(status=claimed_status, claimed_at=now, updated_at=now))
+	).values(status="CLAIMED", claimed_at=now, updated_at=now))
 	db.commit()
 	if updated.rowcount != 1:
 		response.status_code = status.HTTP_204_NO_CONTENT
@@ -768,6 +780,10 @@ def claim_next_job(response: Response, agent: AgentRecord = Depends(authenticate
 		job.command_json = _signed_command(job, issued_at=now)
 		db.commit()
 		db.refresh(job)
+	return _job_assignment(job)
+
+
+def _job_assignment(job: CentralJobRecord) -> dict[str, Any]:
 	return {
 		"agent_protocol_version": AGENT_PROTOCOL_VERSION,
 		"central_job_id": job.central_job_id,
@@ -782,6 +798,23 @@ def claim_next_job(response: Response, agent: AgentRecord = Depends(authenticate
 		"execution_mode": (job.request_json or {}).get("execution_mode", "normal_local"),
 		"command": job.command_json,
 	}
+
+
+@router.post("/agent/jobs/{central_job_id}/delivery-ack")
+def acknowledge_job_delivery(central_job_id: str, agent: AgentRecord = Depends(authenticated_agent), db: Session = Depends(get_db)):
+	job = _owned_job(db, central_job_id, agent)
+	if job.local_execution_state is not None:
+		return {"accepted": True, "duplicate": True, "status": job.status}
+	if job.status not in {"CLAIMED", "WAITING_LOCAL_APPROVAL"}:
+		raise HTTPException(status_code=409, detail="Central job is not awaiting delivery acknowledgement.")
+	execution_mode = (job.request_json or {}).get("execution_mode", "normal_local")
+	requires_local_approval = execution_mode == "boot_sanitize" or not job.dry_run
+	job.local_execution_state = "WAITING_LOCAL_APPROVAL" if requires_local_approval else "READY"
+	if requires_local_approval:
+		job.status = "WAITING_LOCAL_APPROVAL"
+	job.updated_at = utc_now()
+	db.commit()
+	return {"accepted": True, "duplicate": False, "status": job.status}
 
 
 def _owned_job(db: Session, central_job_id: str, agent: AgentRecord) -> CentralJobRecord:

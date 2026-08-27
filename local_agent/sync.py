@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import platform as platform_module
 import socket
@@ -23,6 +24,8 @@ from .command_verifier import canonical_command, verify_remote_command
 
 
 AGENT_PROTOCOL_VERSION = "1"
+ORPHANED_CENTRAL_JOB_DETAIL = "Central job not found for authenticated agent."
+logger = logging.getLogger(__name__)
 
 
 class AgentCredentialStore:
@@ -134,6 +137,7 @@ class CentralSyncClient:
 			"agent_id": credential.get("agent_id") if credential else None,
 			"central_url": self.central_url,
 			"outbox_pending": outbox["pending"],
+			"outbox_abandoned": outbox["abandoned"],
 			"last_heartbeat": outbox["last_heartbeat"],
 			"agent_protocol_version": AGENT_PROTOCOL_VERSION,
 		}
@@ -178,9 +182,12 @@ class CentralSyncClient:
 				return None
 			response.raise_for_status()
 			payload = response.json()
-		if payload.get("agent_protocol_version") != AGENT_PROTOCOL_VERSION:
-			raise RuntimeError("Central returned an incompatible agent protocol version.")
-		request = self._verify_and_record_command(payload)
+			if payload.get("agent_protocol_version") != AGENT_PROTOCOL_VERSION:
+				raise RuntimeError("Central returned an incompatible agent protocol version.")
+			request = self._verify_and_record_command(payload)
+			# Acknowledge only after the signed assignment is durably committed locally.
+			acknowledgement = client.post(f"/agent/jobs/{payload['central_job_id']}/delivery-ack")
+			acknowledgement.raise_for_status()
 		if payload.get("execution_mode", "normal_local") == "normal_local" and request["dry_run"] and self.auto_run_dry_run and request["local_job_id"] is None:
 			self.approve_remote_job(request["central_job_id"], local_approved=False)
 		return self.job_store.get_remote_request(payload["central_job_id"])
@@ -302,12 +309,54 @@ class CentralSyncClient:
 				method, path = self._outbox_destination(message)
 				with self._client() as client:
 					response = client.request(method, path, json=message["payload"])
+					if self._is_orphaned_central_job(message, response):
+						self.job_store.mark_outbox_abandoned(
+							message["outbox_id"], reason=ORPHANED_CENTRAL_JOB_DETAIL, http_status=404,
+						)
+						logger.warning(
+							"Outbox delivery abandoned kind=%s central_job_id=%s http_status=404 "
+							"retryable=false detail=%s",
+							message["kind"], message.get("central_job_id"), ORPHANED_CENTRAL_JOB_DETAIL,
+						)
+						continue
 					response.raise_for_status()
 				self.job_store.mark_outbox_delivered(message["outbox_id"])
 				delivered += 1
 			except Exception as exc:
-				self.job_store.mark_outbox_failed(message["outbox_id"], type(exc).__name__)
+				status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+				detail = self._safe_central_detail(exc.response) if isinstance(exc, httpx.HTTPStatusError) else None
+				diagnostic = type(exc).__name__
+				if status_code is not None:
+					diagnostic += f" HTTP {status_code}"
+				if detail:
+					diagnostic += f": {detail}"
+				self.job_store.mark_outbox_failed(message["outbox_id"], diagnostic)
+				logger.warning(
+					"Outbox delivery failed kind=%s central_job_id=%s http_status=%s retryable=true detail=%s",
+					message["kind"], message.get("central_job_id"), status_code, detail or type(exc).__name__,
+				)
 		return delivered
+
+	@staticmethod
+	def _safe_central_detail(response: httpx.Response) -> str | None:
+		try:
+			payload = response.json()
+		except (ValueError, json.JSONDecodeError):
+			return None
+		detail = payload.get("detail") if isinstance(payload, dict) else None
+		if not isinstance(detail, str):
+			return None
+		if any(marker in detail.lower() for marker in ("password", "secret", "token", "credential", "authorization")):
+			return "<redacted>"
+		return detail[:300]
+
+	@classmethod
+	def _is_orphaned_central_job(cls, message: dict[str, Any], response: httpx.Response) -> bool:
+		return (
+			message.get("kind") in {"job_event", "job_result"}
+			and response.status_code == 404
+			and cls._safe_central_detail(response) == ORPHANED_CENTRAL_JOB_DETAIL
+		)
 
 	def run_once(self) -> None:
 		try:

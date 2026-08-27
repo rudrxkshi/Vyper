@@ -263,11 +263,12 @@ def create_app(
 		if app.state.sync_client is None:
 			return {
 				"configured": False, "enrolled": False, "agent_id": None,
-				"central_url": None, "outbox_pending": 0, "last_heartbeat": None,
+				"central_url": None, "outbox_pending": 0, "outbox_abandoned": 0, "last_heartbeat": None,
 				"agent_protocol_version": "1",
 			}
 		return app.state.sync_client.status()
 
+	@app.get("/remote-requests", dependencies=[Depends(_require_local_api_key)], include_in_schema=False)
 	@app.get("/remote-jobs", dependencies=[Depends(_require_local_api_key)])
 	def list_remote_jobs():
 		return store().list_remote_requests()

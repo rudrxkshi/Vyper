@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ACTIVE_STATES = (
 	"PENDING",
 	"PROFILING",
@@ -148,7 +148,10 @@ class LocalJobStore:
 					last_attempt_at TEXT,
 					next_attempt_at TEXT NOT NULL,
 					delivered_at TEXT,
-					last_error TEXT
+					last_error TEXT,
+					abandoned_at TEXT,
+					abandon_reason TEXT,
+					abandon_http_status INTEGER
 				);
 				CREATE TABLE IF NOT EXISTS remote_command_receipts (
 					nonce TEXT PRIMARY KEY,
@@ -158,6 +161,14 @@ class LocalJobStore:
 				);
 				"""
 			)
+			outbox_columns = {row["name"] for row in connection.execute("PRAGMA table_info(outbox)")}
+			for name, definition in (
+				("abandoned_at", "TEXT"),
+				("abandon_reason", "TEXT"),
+				("abandon_http_status", "INTEGER"),
+			):
+				if name not in outbox_columns:
+					connection.execute(f"ALTER TABLE outbox ADD COLUMN {name} {definition}")
 			connection.execute(
 				"INSERT OR REPLACE INTO schema_metadata(key, value) VALUES('schema_version', ?)",
 				(str(SCHEMA_VERSION),),
@@ -561,7 +572,8 @@ class LocalJobStore:
 		with self._connect() as connection:
 			rows = connection.execute(
 				"""
-				SELECT * FROM outbox WHERE delivered_at IS NULL AND next_attempt_at <= ?
+				SELECT * FROM outbox
+				WHERE delivered_at IS NULL AND abandoned_at IS NULL AND next_attempt_at <= ?
 				ORDER BY created_at LIMIT ?
 				""",
 				(now or utc_now(), max(1, min(limit, 100))),
@@ -593,16 +605,44 @@ class LocalJobStore:
 				(attempt, utc_now(), next_iso, str(error)[:500], outbox_id),
 			)
 
+	def mark_outbox_abandoned(self, outbox_id: str, *, reason: str, http_status: int) -> None:
+		now = utc_now()
+		with self._connect() as connection:
+			row = connection.execute("SELECT attempt_count FROM outbox WHERE outbox_id = ?", (outbox_id,)).fetchone()
+			if row is None:
+				return
+			connection.execute(
+				"""
+				UPDATE outbox SET attempt_count = ?, last_attempt_at = ?, last_error = ?,
+				abandoned_at = ?, abandon_reason = ?, abandon_http_status = ?
+				WHERE outbox_id = ? AND delivered_at IS NULL AND abandoned_at IS NULL
+				""",
+				(
+					int(row["attempt_count"]) + 1, now, f"terminal HTTP {http_status}: {reason}"[:500],
+					now, str(reason)[:500], int(http_status), outbox_id,
+				),
+			)
+
+	def get_outbox_message(self, outbox_id: str) -> dict[str, Any] | None:
+		with self._connect() as connection:
+			row = connection.execute("SELECT * FROM outbox WHERE outbox_id = ?", (outbox_id,)).fetchone()
+		return None if row is None else {**dict(row), "payload": self._load(row["payload_json"])}
+
 	def outbox_summary(self) -> dict[str, Any]:
 		with self._connect() as connection:
 			row = connection.execute(
 				"""
-				SELECT sum(CASE WHEN delivered_at IS NULL THEN 1 ELSE 0 END) AS pending,
+				SELECT sum(CASE WHEN delivered_at IS NULL AND abandoned_at IS NULL THEN 1 ELSE 0 END) AS pending,
+				sum(CASE WHEN abandoned_at IS NOT NULL THEN 1 ELSE 0 END) AS abandoned,
 				max(CASE WHEN kind = 'heartbeat' THEN delivered_at END) AS last_heartbeat
 				FROM outbox
 				"""
 			).fetchone()
-		return {"pending": int(row["pending"] or 0), "last_heartbeat": row["last_heartbeat"]}
+		return {
+			"pending": int(row["pending"] or 0),
+			"abandoned": int(row["abandoned"] or 0),
+			"last_heartbeat": row["last_heartbeat"],
+		}
 
 	def _contains_secret(self, value: Any) -> bool:
 		markers = ("password", "secret", "token", "credential", "passphrase")

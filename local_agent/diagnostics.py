@@ -41,7 +41,9 @@ def _state_summary(path: Path) -> dict[str, Any]:
 	try:
 		connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 		try:
-			pending = connection.execute("SELECT count(*) FROM outbox WHERE delivered_at IS NULL").fetchone()[0]
+			columns = {row[1] for row in connection.execute("PRAGMA table_info(outbox)")}
+			pending_where = "delivered_at IS NULL AND abandoned_at IS NULL" if "abandoned_at" in columns else "delivered_at IS NULL"
+			pending = connection.execute(f"SELECT count(*) FROM outbox WHERE {pending_where}").fetchone()[0]
 			last = connection.execute("SELECT max(delivered_at) FROM outbox WHERE kind = 'heartbeat'").fetchone()[0]
 			devices = 0
 		except sqlite3.Error:

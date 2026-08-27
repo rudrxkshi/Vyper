@@ -209,10 +209,17 @@ def test_job_claim_is_assigned_atomic_idempotent_and_waits_for_local_approval(tm
 		}).json()
 		claim = client.get("/agent/jobs/next", headers=headers)
 		second_claim = client.get("/agent/jobs/next", headers=headers)
+		acknowledged = client.post(f"/agent/jobs/{job['central_job_id']}/delivery-ack", headers=headers)
+		duplicate_ack = client.post(f"/agent/jobs/{job['central_job_id']}/delivery-ack", headers=headers)
+		after_ack = client.get("/agent/jobs/next", headers=headers)
 	assert duplicate["central_job_id"] == job["central_job_id"]
 	assert claim.status_code == 200
-	assert claim.json()["status"] == "WAITING_LOCAL_APPROVAL"
-	assert second_claim.status_code == 204
+	assert claim.json()["status"] == "CLAIMED"
+	assert second_claim.status_code == 200
+	assert second_claim.json()["central_job_id"] == job["central_job_id"]
+	assert acknowledged.json() == {"accepted": True, "duplicate": False, "status": "WAITING_LOCAL_APPROVAL"}
+	assert duplicate_ack.json() == {"accepted": True, "duplicate": True, "status": "WAITING_LOCAL_APPROVAL"}
+	assert after_ack.status_code == 204
 
 
 def test_claimed_job_contains_endpoint_verifiable_signed_command(tmp_path):
@@ -470,11 +477,49 @@ def test_system_disk_boot_dry_run_still_requires_local_boot_confirmation(tmp_pat
 			"expires_in_seconds": 3600, "execution_mode": "boot_sanitize",
 		})
 		claim = client.get("/agent/jobs/next", headers=headers)
+		acknowledged = client.post(f"/agent/jobs/{created.json()['central_job_id']}/delivery-ack", headers=headers)
 	assert created.status_code == 201
 	assert created.json()["execution_mode"] == "boot_sanitize"
 	assert created.json()["request"]["execution_mode"] == "boot_sanitize"
-	assert claim.json()["status"] == "WAITING_LOCAL_APPROVAL"
+	assert claim.json()["status"] == "CLAIMED"
+	assert acknowledged.json()["status"] == "WAITING_LOCAL_APPROVAL"
 	assert claim.json()["authorization_policy"]["local_approval_required"] is True
+
+
+def test_poll_persists_before_ack_and_exposes_destructive_request_without_execution(tmp_path):
+	with _central_client(tmp_path) as central:
+		enrolled, _headers, _asset, job = _prepare_agent_asset_job(central)
+		credential_store = AgentCredentialStore(tmp_path / "credential.json")
+		credential_store.save(enrolled)
+		store = LocalJobStore(tmp_path / "local.db")
+		submissions = []
+		ack_observations = []
+
+		def forward(request):
+			if request.url.path.endswith("/delivery-ack"):
+				ack_observations.append(store.get_remote_request(job["central_job_id"]) is not None)
+			response = central.request(
+				request.method, request.url.raw_path.decode("ascii"),
+				headers=dict(request.headers), content=request.content,
+			)
+			return httpx.Response(response.status_code, headers=dict(response.headers), content=response.content)
+
+		sync = CentralSyncClient(
+			central_url="http://central.test", credential_store=credential_store, job_store=store,
+			discovery=DiscoveryStub([]), submit_local_job=lambda **kwargs: submissions.append(kwargs),
+			transport=httpx.MockTransport(forward), auto_run_dry_run=False,
+		)
+		request = sync.poll_job()
+		stored = store.get_remote_request(job["central_job_id"])
+		central_job = next(item for item in central.get("/central-jobs").json() if item["central_job_id"] == job["central_job_id"])
+	assert request["central_job_id"] == stored["central_job_id"] == job["central_job_id"]
+	assert stored["status"] == "WAITING_LOCAL_APPROVAL"
+	assert stored["local_approved"] is False
+	assert stored["local_job_id"] is None
+	assert central_job["status"] == "WAITING_LOCAL_APPROVAL"
+	assert central_job["local_execution_state"] == "WAITING_LOCAL_APPROVAL"
+	assert ack_observations == [True]
+	assert submissions == []
 
 
 def test_job_is_never_delivered_to_another_agent_and_expired_job_is_skipped(tmp_path):
@@ -700,6 +745,166 @@ def test_local_credential_permissions_and_offline_outbox_retry(tmp_path):
 	assert sync.flush_outbox() == 1
 	assert restarted.due_outbox(now="9999-12-31T00:00:00Z") == []
 	assert "never-log-this" not in json.dumps(restarted.due_outbox(now="9999-12-31T00:00:00Z"))
+
+
+def _outbox_sync(tmp_path, handler):
+	credential_store = AgentCredentialStore(tmp_path / "credential.json")
+	credential_store.save({"agent_id": "agent-1", "agent_token": "never-log-this", "agent_protocol_version": "1"})
+	store = LocalJobStore(tmp_path / "local.db")
+	sync = CentralSyncClient(
+		central_url="http://central.test", credential_store=credential_store, job_store=store,
+		discovery=DiscoveryStub([]), submit_local_job=lambda **kwargs: "unused",
+		transport=httpx.MockTransport(handler),
+	)
+	return store, sync
+
+
+@pytest.mark.parametrize("kind", ["job_result", "job_event"])
+def test_exact_orphan_job_upload_is_abandoned_durably_without_changing_local_result(tmp_path, kind):
+	calls = []
+
+	def handler(request):
+		calls.append(request.url.path)
+		return httpx.Response(404, json={"detail": "Central job not found for authenticated agent."})
+
+	store, sync = _outbox_sync(tmp_path, handler)
+	local_job_id = "local-orphan"
+	store.create_job(local_job_id=local_job_id, api_version="2", target="/dev/mock", dry_run=False,
+		authorization_metadata={"approved": True})
+	result = {
+		"job_state": "VERIFIED", "final_status": "VERIFIED", "message": "Verified fixture.",
+		"progress": None, "profile": {"serial_number": "SER-1"}, "policy": {}, "execution": {},
+		"verification": {"status": "VERIFIED"}, "evidence": {"integrity_hash": "evidence-hash"},
+		"certificate": {"certificate_id": "cert-1", "certificate_hash": "certificate-hash",
+			"outcome_kind": "sanitization_certificate", "successful_sanitization_claim": True},
+		"error": None,
+	}
+	store.complete(local_job_id, result)
+	outbox_id = f"orphan-{kind}"
+	store.enqueue_outbox(
+		outbox_id=outbox_id, kind=kind, central_job_id="missing-central-job", local_job_id=local_job_id,
+		sequence=1 if kind == "job_event" else None, idempotency_key=f"{kind}:missing-central-job",
+		payload={"agent_protocol_version": "1", "local_job_id": local_job_id},
+	)
+	original = store.get_job(local_job_id)
+	assert sync.flush_outbox() == 0
+	assert sync.flush_outbox() == 0
+	history = store.get_outbox_message(outbox_id)
+	assert calls == [f"/agent/jobs/missing-central-job/{'events' if kind == 'job_event' else 'result'}"]
+	assert history["delivered_at"] is None
+	assert history["abandoned_at"] is not None
+	assert history["abandon_http_status"] == 404
+	assert history["abandon_reason"] == "Central job not found for authenticated agent."
+	assert history["attempt_count"] == 1
+	assert "terminal HTTP 404" in history["last_error"]
+	assert store.outbox_summary()["pending"] == 0
+	assert store.outbox_summary()["abandoned"] == 1
+	assert store.due_outbox(now="9999-12-31T00:00:00Z") == []
+	assert store.get_job(local_job_id) == original
+
+
+@pytest.mark.parametrize(("status_code", "body"), [
+	(400, {"detail": "Bad request."}),
+	(401, {"detail": "Agent authentication required."}),
+	(403, {"detail": "Agent credential has been revoked."}),
+	(409, {"detail": "Conflict."}),
+	(422, {"detail": "Invalid result."}),
+	(429, {"detail": "Rate limited."}),
+	(500, {"detail": "Temporary server failure."}),
+	(404, {"detail": "Some other missing resource."}),
+])
+def test_non_orphan_http_failures_remain_retryable(tmp_path, status_code, body):
+	store, sync = _outbox_sync(tmp_path, lambda request: httpx.Response(status_code, json=body))
+	store.enqueue_outbox(
+		outbox_id="retry-result", kind="job_result", central_job_id="central-1", local_job_id="local-1",
+		idempotency_key="result:central-1", payload={"fixture": True},
+	)
+	assert sync.flush_outbox() == 0
+	history = store.get_outbox_message("retry-result")
+	assert history["abandoned_at"] is None
+	assert history["attempt_count"] == 1
+	assert store.outbox_summary()["pending"] == 1
+
+
+def test_network_and_malformed_404_failures_remain_retryable(tmp_path):
+	for name, handler in (
+		("network", lambda request: (_ for _ in ()).throw(httpx.ConnectError("offline", request=request))),
+		("timeout", lambda request: (_ for _ in ()).throw(httpx.ReadTimeout("timed out", request=request))),
+		("malformed", lambda request: httpx.Response(404, content=b"not-json")),
+	):
+		case = tmp_path / name
+		store, sync = _outbox_sync(case, handler)
+		store.enqueue_outbox(
+			outbox_id=name, kind="job_result", central_job_id="central-1", local_job_id="local-1",
+			idempotency_key=f"result:{name}", payload={"fixture": True},
+		)
+		assert sync.flush_outbox() == 0
+		assert store.get_outbox_message(name)["abandoned_at"] is None
+		assert store.outbox_summary()["pending"] == 1
+
+
+def test_outbox_failure_diagnostics_do_not_persist_or_log_secret_detail(tmp_path, caplog):
+	secret = "do-not-record-this-token"
+	store, sync = _outbox_sync(
+		tmp_path, lambda request: httpx.Response(401, json={"detail": f"agent token {secret}"}),
+	)
+	store.enqueue_outbox(
+		outbox_id="secret-error", kind="job_result", central_job_id="central-1", local_job_id="local-1",
+		idempotency_key="result:secret-error", payload={"fixture": True},
+	)
+	assert sync.flush_outbox() == 0
+	assert secret not in store.get_outbox_message("secret-error")["last_error"]
+	assert secret not in caplog.text
+	assert "<redacted>" in store.get_outbox_message("secret-error")["last_error"]
+
+
+@pytest.mark.parametrize("kind", ["heartbeat", "inventory"])
+def test_non_job_messages_never_use_orphan_404_terminal_handling(tmp_path, kind):
+	store, sync = _outbox_sync(
+		tmp_path, lambda request: httpx.Response(404, json={"detail": "Central job not found for authenticated agent."}),
+	)
+	store.enqueue_outbox(outbox_id=kind, kind=kind, idempotency_key=f"{kind}:1", payload={"fixture": True})
+	assert sync.flush_outbox() == 0
+	assert store.get_outbox_message(kind)["abandoned_at"] is None
+	assert store.outbox_summary()["pending"] == 1
+
+
+def test_successful_outbox_delivery_retains_accepted_semantics(tmp_path):
+	calls = []
+	store, sync = _outbox_sync(tmp_path, lambda request: calls.append(request.url.path) or httpx.Response(200, json={"accepted": True}))
+	store.enqueue_outbox(
+		outbox_id="success", kind="job_result", central_job_id="central-1", local_job_id="local-1",
+		idempotency_key="result:central-1", payload={"fixture": True},
+	)
+	assert sync.flush_outbox() == 1
+	assert sync.flush_outbox() == 0
+	history = store.get_outbox_message("success")
+	assert calls == ["/agent/jobs/central-1/result"]
+	assert history["delivered_at"] is not None
+	assert history["abandoned_at"] is None
+	assert store.outbox_summary()["pending"] == 0
+
+
+def test_existing_outbox_schema_is_upgraded_without_losing_pending_payload(tmp_path):
+	database = tmp_path / "legacy.db"
+	with sqlite3.connect(database) as connection:
+		connection.execute("""
+			CREATE TABLE outbox (
+				outbox_id TEXT PRIMARY KEY, kind TEXT NOT NULL, central_job_id TEXT, local_job_id TEXT,
+				sequence INTEGER, idempotency_key TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL,
+				created_at TEXT NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, last_attempt_at TEXT,
+				next_attempt_at TEXT NOT NULL, delivered_at TEXT, last_error TEXT
+			)
+		""")
+		connection.execute(
+			"INSERT INTO outbox(outbox_id, kind, idempotency_key, payload_json, created_at, next_attempt_at) VALUES(?, ?, ?, ?, ?, ?)",
+			("legacy", "heartbeat", "heartbeat:legacy", "{}", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+		)
+	store = LocalJobStore(database)
+	row = store.get_outbox_message("legacy")
+	assert row["payload"] == {}
+	assert row["abandoned_at"] is None
+	assert store.outbox_summary()["pending"] == 1
 
 
 def test_queued_job_result_payload_and_outbox_share_result_idempotency_key(tmp_path):
