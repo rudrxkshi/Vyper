@@ -198,6 +198,96 @@ def test_inventory_missing_serial_has_safe_agent_scoped_fallback(tmp_path):
 	assert assets[0]["identity_confidence"] == "LOW"
 
 
+def test_inventory_sync_publishes_mount_state_transitions_including_return_to_prior_state(tmp_path):
+	with _central_client(tmp_path) as central:
+		enrollment = _enroll(central).json()
+		credential_store = AgentCredentialStore(tmp_path / "credential.json")
+		credential_store.save(enrollment)
+		store = LocalJobStore(tmp_path / "local.db")
+		device = DiscoveredDevice(
+			device_path="/dev/sdb", device_type="HDD", model="Mock Disk", serial_number="SER-1",
+			size_bytes=1000, interface="ATA/SATA", transport="SATA", rotational=True,
+			mounted=False, mounted_partitions=[], is_system_device=False, eligible_for_sanitization=True,
+		)
+		discovery = DiscoveryStub([device])
+
+		def forward(request):
+			response = central.request(
+				request.method, request.url.path,
+				headers={
+					"Authorization": request.headers["Authorization"],
+					"Content-Type": request.headers["Content-Type"],
+				},
+				content=request.content,
+			)
+			return httpx.Response(response.status_code, content=response.content, headers=dict(response.headers))
+
+		sync = CentralSyncClient(
+			central_url="http://central.test", credential_store=credential_store, job_store=store,
+			discovery=discovery, submit_local_job=lambda **kwargs: "unused",
+			transport=httpx.MockTransport(forward),
+		)
+		assert sync.queue_inventory() is True
+		assert sync.flush_outbox() == 1
+		device.mounted = True
+		device.mounted_partitions = [{"path": "/dev/sdb1", "mountpoint": "/mnt/data"}]
+		device.eligible_for_sanitization = False
+		assert sync.queue_inventory() is True
+		assert sync.flush_outbox() == 1
+		device.mounted = False
+		device.mounted_partitions = []
+		device.eligible_for_sanitization = True
+		assert sync.queue_inventory() is True
+		assert sync.flush_outbox() == 1
+
+		assets = central.get(f"/agents/{enrollment['agent_id']}/assets").json()
+		with sqlite3.connect(tmp_path / "local.db") as connection:
+			rows = connection.execute(
+				"SELECT idempotency_key, payload_json FROM outbox WHERE kind = 'inventory' ORDER BY rowid"
+			).fetchall()
+
+	assert len(assets) == 1
+	asset = assets[0]
+	assert asset["profile_json"]["mounted"] is False
+	assert asset["profile_json"]["mounted_partitions"] == []
+	assert asset["profile_json"]["eligible_for_sanitization"] is True
+	assert len(asset["observations_json"]) == 3
+	assert len(rows) == 3
+	versions = [json.loads(row[1])["inventory_version"] for row in rows]
+	assert versions[0] != versions[1]
+	assert versions[0] == versions[2]
+	assert rows[0][0] != rows[2][0]
+
+
+def test_inventory_sync_deduplicates_identical_consecutive_normalized_snapshots(tmp_path):
+	credential_store = AgentCredentialStore(tmp_path / "credential.json")
+	credential_store.save({"agent_id": "agent-1", "agent_token": "fixture-token", "agent_protocol_version": "1"})
+	store = LocalJobStore(tmp_path / "local.db")
+	first = DiscoveredDevice(
+		device_path="/dev/sdb", device_type="HDD", serial_number="SER-B", mounted=True,
+		mounted_partitions=[
+			{"path": "/dev/sdb2", "mountpoint": "/mnt/b"},
+			{"path": "/dev/sdb1", "mountpoint": "/mnt/a"},
+		],
+		is_system_device=False, eligible_for_sanitization=False, warnings=["warning-b", "warning-a"],
+	)
+	second = DiscoveredDevice(
+		device_path="/dev/sdc", device_type="HDD", serial_number="SER-C",
+		mounted=False, is_system_device=False, eligible_for_sanitization=True,
+	)
+	discovery = DiscoveryStub([first, second])
+	sync = CentralSyncClient(
+		central_url="http://central.test", credential_store=credential_store, job_store=store,
+		discovery=discovery, submit_local_job=lambda **kwargs: "unused",
+	)
+	assert sync.queue_inventory() is True
+	discovery.devices = [second, first]
+	first.mounted_partitions.reverse()
+	first.warnings.reverse()
+	assert sync.queue_inventory() is False
+	assert len(store.due_outbox(now="9999-12-31T00:00:00Z")) == 1
+
+
 def test_replacement_hardware_at_same_path_is_a_new_high_confidence_asset(tmp_path):
 	with _central_client(tmp_path) as client:
 		enrolled = _enroll(client).json()
@@ -993,6 +1083,30 @@ def test_sync_loop_isolates_poll_failure_and_continues_flushing_and_iterating(ca
 	assert client.delivered_heartbeats == 1
 	assert "operation=poll_job" in caplog.text
 	assert "exception=RuntimeError" in caplog.text
+
+
+def test_sync_loop_refreshes_inventory_on_existing_bounded_cadence():
+	class Client:
+		def __init__(self):
+			self.inventory_calls = 0
+
+		queue_heartbeat = lambda self: None
+		poll_job = lambda self: None
+		queue_job_updates = lambda self: None
+		flush_outbox = lambda self: None
+
+		def queue_inventory(self):
+			self.inventory_calls += 1
+
+	client = Client()
+	loop = SyncLoop(client, interval_seconds=5, inventory_interval_seconds=60)
+	next_heartbeat, next_inventory = loop._run_iteration(
+		now=0.0, next_heartbeat=0.0, next_inventory=0.0,
+	)
+	loop._run_iteration(now=59.0, next_heartbeat=next_heartbeat, next_inventory=next_inventory)
+	loop._run_iteration(now=60.0, next_heartbeat=next_heartbeat, next_inventory=next_inventory)
+
+	assert client.inventory_calls == 2
 
 
 def test_sync_loop_failure_logging_is_rate_limited_and_redacts_secrets(caplog, monkeypatch):

@@ -28,6 +28,19 @@ ORPHANED_CENTRAL_JOB_DETAIL = "Central job not found for authenticated agent."
 logger = logging.getLogger(__name__)
 
 
+def _normalize_inventory_value(value: Any) -> Any:
+	"""Return a deterministic inventory representation without volatile data."""
+	if isinstance(value, dict):
+		return {key: _normalize_inventory_value(value[key]) for key in sorted(value)}
+	if isinstance(value, list):
+		normalized = [_normalize_inventory_value(item) for item in value]
+		return sorted(
+			normalized,
+			key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+		)
+	return value
+
+
 def _safe_sync_error(exc: Exception) -> str:
 	if isinstance(exc, httpx.HTTPStatusError):
 		return f"Central returned HTTP {exc.response.status_code}."
@@ -184,7 +197,7 @@ class CentralSyncClient:
 
 	def queue_inventory(self) -> bool:
 		credential = self._credential()
-		devices = [device.to_dict() for device in self.discovery.discover()]
+		devices = _normalize_inventory_value([device.to_dict() for device in self.discovery.discover()])
 		canonical = json.dumps(devices, sort_keys=True, separators=(",", ":"))
 		version = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 		payload = {
@@ -193,8 +206,8 @@ class CentralSyncClient:
 			"observed_at": utc_now(),
 			"devices": devices,
 		}
-		return self.job_store.enqueue_outbox(
-			outbox_id=str(uuid4()), kind="inventory", idempotency_key=f"inventory:{credential['agent_id']}:{version}", payload=payload,
+		return self.job_store.enqueue_inventory_snapshot(
+			outbox_id=str(uuid4()), agent_id=credential["agent_id"], inventory_version=version, payload=payload,
 		)
 
 	def poll_job(self) -> dict[str, Any] | None:

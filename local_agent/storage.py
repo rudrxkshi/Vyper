@@ -568,6 +568,46 @@ class LocalJobStore:
 			)
 		return inserted.rowcount == 1
 
+	def enqueue_inventory_snapshot(
+		self,
+		*,
+		outbox_id: str,
+		agent_id: str,
+		inventory_version: str,
+		payload: dict[str, Any],
+	) -> bool:
+		"""Queue a changed inventory state while retaining delivered history.
+
+		Inventory versions identify content, so an earlier version may legitimately
+		recur after an intervening state change. The outbox delivery key therefore
+		identifies this observation, while the latest inventory row provides atomic
+		consecutive-snapshot deduplication.
+		"""
+		if self._contains_secret(payload):
+			raise ValueError("Secret-bearing payload cannot be stored in the outbox.")
+		if payload.get("inventory_version") != inventory_version:
+			raise ValueError("Inventory payload version does not match its snapshot version.")
+		now = utc_now()
+		with self._connect() as connection:
+			connection.execute("BEGIN IMMEDIATE")
+			latest = connection.execute(
+				"SELECT payload_json FROM outbox WHERE kind = 'inventory' ORDER BY rowid DESC LIMIT 1"
+			).fetchone()
+			if latest is not None:
+				previous_payload = self._load(latest["payload_json"])
+				if isinstance(previous_payload, dict) and previous_payload.get("inventory_version") == inventory_version:
+					return False
+			idempotency_key = f"inventory:{agent_id}:{inventory_version}:{outbox_id}"
+			inserted = connection.execute(
+				"""
+				INSERT OR IGNORE INTO outbox (
+					outbox_id, kind, idempotency_key, payload_json, created_at, next_attempt_at
+				) VALUES (?, 'inventory', ?, ?, ?, ?)
+				""",
+				(outbox_id, idempotency_key, self._dump(payload), now, now),
+			)
+		return inserted.rowcount == 1
+
 	def due_outbox(self, *, now: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
 		with self._connect() as connection:
 			rows = connection.execute(

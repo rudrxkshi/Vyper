@@ -140,3 +140,13 @@ def test_system_and_mounted_disk_remains_visible_and_flagged():
 	assert system_disk.mounted_partitions == [{"path": "/dev/sda2", "mountpoint": "/"}]
 	assert system_disk.eligible_for_sanitization is False
 
+
+def test_unmounted_non_system_disk_is_eligible():
+	by_path = {device.device_path: device for device in _discover()}
+	data_disk = by_path["/dev/sdb"]
+
+	assert data_disk.is_system_device is False
+	assert data_disk.mounted is False
+	assert data_disk.mounted_partitions == []
+	assert data_disk.eligible_for_sanitization is True
+

@@ -266,7 +266,7 @@ export default function VyperDashboard() {
         setOrganizations(organizationsData);
         setRemotePolicies(policiesData);
         setSecurityEvents(securityEventsData);
-        setSelectedAgentId((current) => current || normalizedAgents[0]?.agent_id || "");
+        setSelectedAgentId((current) => normalizedAgents.some((agent) => agent.agent_id === current) ? current : normalizedAgents[0]?.agent_id || "");
       }
 
       setAssets(assetsData);
