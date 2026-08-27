@@ -652,6 +652,21 @@ test("local export uses Tauri-compatible assets without changing central default
   }
 });
 
+test("dashboard structural styles are bundled for Tauri CSP processing", () => {
+  const dashboardSource = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  const globalStyles = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  const tauriConfig = JSON.parse(readFileSync(
+    new URL("../src-tauri/tauri.conf.json", import.meta.url),
+    "utf8",
+  ));
+
+  assert.doesNotMatch(dashboardSource, /<style>\{`[\s\S]*?\.nb-root/);
+  assert.match(globalStyles, /\.nb-root\s*\{/);
+  assert.match(globalStyles, /\.nb-shell\s*\{/);
+  assert.equal(tauriConfig.app.security.dangerousDisableAssetCspModification, undefined);
+  assert.match(tauriConfig.app.security.csp, /style-src 'self' 'unsafe-inline'/);
+});
+
 test("dashboard downloads use the central Linux artifact contract without leaving the shell", () => {
   const releases = [
     { platform: "windows", architecture: "x86_64", download_url: "/downloads/windows.zip" },

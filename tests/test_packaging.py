@@ -325,6 +325,30 @@ def test_embedded_static_asset_validation_rejects_origin_root_and_missing_assets
 		builder.validate_embedded_static_assets(export)
 
 
+def test_embedded_static_asset_validation_requires_dashboard_styles_in_bundled_css(tmp_path):
+	builder = _load_build_release()
+	export = tmp_path / "out"
+	chunks = export / "_next" / "static" / "chunks"
+	chunks.mkdir(parents=True)
+	stylesheet = chunks / "app.css"
+	stylesheet.write_text("body{}", encoding="utf-8")
+	entry = '<link rel="stylesheet" href="../_next/static/chunks/app.css"><div class="nb-root"><style>.nb-root{display:grid}</style></div>'
+	(export / "index.html").write_text(entry, encoding="utf-8")
+
+	with pytest.raises(RuntimeError, match="must be bundled, not inline"):
+		builder.validate_embedded_static_assets(export)
+
+	(export / "index.html").write_text(
+		'<link rel="stylesheet" href="../_next/static/chunks/app.css"><div class="nb-root"></div>',
+		encoding="utf-8",
+	)
+	with pytest.raises(RuntimeError, match="missing from bundled CSS"):
+		builder.validate_embedded_static_assets(export)
+
+	stylesheet.write_text(".nb-root{display:grid}", encoding="utf-8")
+	assert builder.validate_embedded_static_assets(export) == ["../_next/static/chunks/app.css"]
+
+
 def test_desktop_gui_artifact_resolution_supports_standard_and_custom_cargo_targets(tmp_path):
 	builder = _load_build_release()
 	frontend = tmp_path / "frontend"

@@ -29,6 +29,8 @@ class _StaticAssetReferences(HTMLParser):
 	def __init__(self) -> None:
 		super().__init__()
 		self.references: list[str] = []
+		self.inline_styles: list[str] = []
+		self._in_style = False
 
 	def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
 		attributes = dict(attrs)
@@ -36,6 +38,16 @@ class _StaticAssetReferences(HTMLParser):
 			self.references.append(str(attributes["href"]))
 		if tag == "script" and str(attributes.get("src") or "").split("?", 1)[0].endswith(".js"):
 			self.references.append(str(attributes["src"]))
+		if tag == "style":
+			self._in_style = True
+
+	def handle_endtag(self, tag: str) -> None:
+		if tag == "style":
+			self._in_style = False
+
+	def handle_data(self, data: str) -> None:
+		if self._in_style:
+			self.inline_styles.append(data)
 
 
 def _export_route(export_root: Path, html: Path) -> str:
@@ -52,9 +64,17 @@ def validate_embedded_static_assets(export_root: Path) -> list[str]:
 	from urllib.parse import urljoin, urlsplit
 
 	validated: list[str] = []
+	dashboard_found = False
+	dashboard_css_found = False
 	for html in sorted(export_root.rglob("*.html")):
+		html_source = html.read_text(encoding="utf-8")
 		parser = _StaticAssetReferences()
-		parser.feed(html.read_text(encoding="utf-8"))
+		parser.feed(html_source)
+		is_dashboard = 'class="nb-root"' in html_source
+		if is_dashboard:
+			dashboard_found = True
+			if any(".nb-root" in style for style in parser.inline_styles):
+				raise RuntimeError(f"Dashboard structural styles must be bundled, not inline, in {html}.")
 		route = _export_route(export_root, html)
 		for reference in parser.references:
 			if reference.startswith("/"):
@@ -65,6 +85,8 @@ def validate_embedded_static_assets(export_root: Path) -> list[str]:
 			asset = export_root / resolved_path.lstrip("/")
 			if not asset.is_file():
 				raise RuntimeError(f"Embedded static asset reference does not exist for {html}: {reference}")
+			if is_dashboard and reference.split("?", 1)[0].endswith(".css"):
+				dashboard_css_found = dashboard_css_found or ".nb-root" in asset.read_text(encoding="utf-8")
 			# The compatibility server uses the same URL path at its loopback origin.
 			http_path = urlsplit(urljoin(f"http://127.0.0.1:8787{route}", reference)).path
 			if http_path != resolved_path:
@@ -72,6 +94,8 @@ def validate_embedded_static_assets(export_root: Path) -> list[str]:
 			validated.append(reference)
 	if not validated:
 		raise RuntimeError("Local console static export contains no CSS or JavaScript entry assets.")
+	if dashboard_found and not dashboard_css_found:
+		raise RuntimeError("Local console dashboard stylesheet is missing from bundled CSS assets.")
 	return validated
 
 
