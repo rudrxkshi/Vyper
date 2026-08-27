@@ -132,6 +132,12 @@ class UserRead(BaseModel):
     created_at: datetime
 
 
+class ChangePasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class JobRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

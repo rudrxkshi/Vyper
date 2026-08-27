@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..auth import OperatorPrincipal, OperatorRole, require_api_key, require_roles
 from ..db import get_db
 from ..models import LoginAttemptRecord, OperatorSessionRecord, UserRecord
-from ..schemas import LoginRequest, MFACodeRequest, MFAEnrollRequest, UserCreate, UserRead, UserUpdate
+from ..schemas import ChangePasswordRequest, LoginRequest, MFACodeRequest, MFAEnrollRequest, UserCreate, UserRead, UserUpdate
 from ..security import (
 	decrypt_mfa_secret, encrypt_mfa_secret, hash_password, new_totp_secret, production_mode,
 	record_audit_event, token_digest, verify_password, verify_totp,
@@ -89,6 +89,26 @@ def logout(request: Request, response: Response, principal: OperatorPrincipal = 
 	db.commit()
 	response.delete_cookie(SESSION_COOKIE, path="/", secure=production_mode(), httponly=True, samesite="lax")
 	response.delete_cookie(CSRF_COOKIE, path="/", secure=production_mode(), httponly=False, samesite="strict")
+
+
+@router.post("/auth/change-password")
+def change_password(payload: ChangePasswordRequest, request: Request, principal: OperatorPrincipal = Depends(require_api_key), db: Session = Depends(get_db)):
+	if principal.user_id is None:
+		raise HTTPException(status_code=403, detail="Development identities cannot change passwords.")
+	user = db.get(UserRecord, principal.user_id)
+	if user is None:
+		raise HTTPException(status_code=404, detail="User not found.")
+	if not verify_password(payload.current_password, user.password_hash):
+		raise HTTPException(status_code=401, detail="Current password is incorrect.")
+	try:
+		user.password_hash = hash_password(payload.new_password)
+	except ValueError as exc:
+		raise HTTPException(status_code=422, detail=str(exc)) from exc
+	user.password_changed_at = _now()
+	record_audit_event(db, actor=principal.audit_identity, action="PASSWORD_CHANGED", resource=f"user:{user.username}",
+		request_id=getattr(request.state, "request_id", None))
+	db.commit()
+	return {"status": "ok", "message": "Password changed successfully."}
 
 
 @router.get("/auth/me")

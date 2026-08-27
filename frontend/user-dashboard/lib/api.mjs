@@ -208,6 +208,11 @@ export function createApiClient({
         method: "POST",
         body: JSON.stringify(buildSanitizeRequest(form)),
       }),
+    changePassword: (currentPassword, newPassword) =>
+      request("/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      }),
   };
 }
 
