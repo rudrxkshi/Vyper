@@ -13,6 +13,7 @@ import tomllib
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
@@ -297,6 +298,78 @@ def test_release_builder_stages_the_native_gui_payload(tmp_path):
 	assert manifest["desktop_gui"] == {"enabled": True, "technology": "tauri", "port_8787_required": False}
 	source = (ROOT / "packaging/build_release.py").read_text(encoding="utf-8")
 	assert '"--features", "custom-protocol"' in source
+
+
+def test_desktop_gui_artifact_resolution_supports_standard_and_custom_cargo_targets(tmp_path):
+	builder = _load_build_release()
+	frontend = tmp_path / "frontend"
+	standard = frontend / "src-tauri" / "target" / "release" / "vyper-gui"
+	custom = frontend / "relative-target" / "release" / "vyper-gui"
+	assert builder.desktop_gui_artifact_path(frontend) == standard.resolve()
+	assert builder.desktop_gui_artifact_path(frontend, "relative-target") == custom.resolve()
+	absolute_target = tmp_path / "absolute-target"
+	assert builder.desktop_gui_artifact_path(frontend, absolute_target) == (absolute_target / "release" / "vyper-gui").resolve()
+
+
+def test_desktop_gui_artifact_validation_fails_closed_and_accepts_elf(tmp_path):
+	builder = _load_build_release()
+	missing = tmp_path / "missing-vyper-gui"
+	with pytest.raises(RuntimeError, match="without producing"):
+		builder.validate_desktop_gui_artifact(missing)
+	non_elf = tmp_path / "non-elf-vyper-gui"
+	non_elf.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	os.chmod(non_elf, 0o755)
+	with pytest.raises(RuntimeError, match="not a Linux ELF"):
+		builder.validate_desktop_gui_artifact(non_elf)
+	elf = tmp_path / "vyper-gui"
+	elf.write_bytes(b"\x7fELF" + b"production-native-fixture")
+	os.chmod(elf, 0o755)
+	assert builder.validate_desktop_gui_artifact(elf) == elf
+
+
+def test_desktop_gui_build_uses_absolute_custom_target_and_copies_verified_elf(tmp_path, monkeypatch):
+	builder = _load_build_release()
+	frontend = tmp_path / "frontend"
+	(frontend / "src-tauri").mkdir(parents=True)
+	(frontend / "src-tauri" / "Cargo.toml").write_text("[package]\nname='fixture'\nversion='1.0.0'\n", encoding="utf-8")
+	staging = tmp_path / "relative-staging"
+	staging.mkdir()
+	monkeypatch.setattr(builder.sys, "platform", "linux")
+	monkeypatch.setattr(builder.shutil, "which", lambda command: "/usr/bin/cargo" if command == "cargo" else None)
+
+	def fake_cargo(_argv, *, cwd, env, check):
+		assert cwd == frontend and check is True
+		target = Path(env["CARGO_TARGET_DIR"])
+		assert target.is_absolute()
+		artifact = target / "release" / "vyper-gui"
+		artifact.parent.mkdir(parents=True)
+		artifact.write_bytes(b"\x7fELF" + b"real-build-output")
+		os.chmod(artifact, 0o755)
+
+	monkeypatch.setattr(builder.subprocess, "run", fake_cargo)
+	packaged = builder.build_desktop_gui(frontend, staging, skip_builds=False)
+	assert packaged == staging / "vyper-gui"
+	assert packaged.read_bytes() == b"\x7fELF" + b"real-build-output"
+
+
+def test_desktop_gui_build_fails_when_cargo_returns_without_artifact(tmp_path, monkeypatch):
+	builder = _load_build_release()
+	frontend = tmp_path / "frontend"
+	(frontend / "src-tauri").mkdir(parents=True)
+	(frontend / "src-tauri" / "Cargo.toml").write_text("[package]\nname='fixture'\nversion='1.0.0'\n", encoding="utf-8")
+	staging = tmp_path / "staging"
+	staging.mkdir()
+	monkeypatch.setattr(builder.sys, "platform", "linux")
+	monkeypatch.setattr(builder.shutil, "which", lambda command: "/usr/bin/cargo" if command == "cargo" else None)
+	monkeypatch.setattr(builder.subprocess, "run", lambda *_args, **_kwargs: None)
+	with pytest.raises(RuntimeError, match="without producing"):
+		builder.build_desktop_gui(frontend, staging, skip_builds=False)
+
+
+def test_desktop_gui_skip_build_fixture_remains_explicitly_non_production(tmp_path):
+	builder = _load_build_release()
+	fixture = builder.build_desktop_gui(tmp_path / "frontend", tmp_path, skip_builds=True)
+	assert fixture.read_text(encoding="utf-8") == "#!/bin/sh\nexit 0\n"
 
 
 def test_vyper_open_prefers_gui_and_falls_back_to_loopback_browser(tmp_path, monkeypatch):
