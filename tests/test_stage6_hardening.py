@@ -27,6 +27,11 @@ from local_agent import process_worker
 from local_agent.storage import LocalJobStore
 
 
+def _signal_process_event(shared_event, release_event):
+	shared_event.set()
+	release_event.wait(timeout=10)
+
+
 def _user(app, username: str, role: str, *, disabled=False):
 	now = datetime.now(timezone.utc)
 	with app.state.session_factory() as db:
@@ -228,6 +233,20 @@ def test_worker_exit_is_inconclusive_and_releases_target_lock(tmp_path):
 	assert job["verification"] is None
 	store.create_job(local_job_id="replacement", api_version="2", target="/dev/mock", dry_run=False,
 		authorization_metadata={"approved": True})
+
+
+def test_process_executor_wakeup_event_is_shared_with_spawned_child_before_exit(tmp_path):
+	executor = ProcessJobExecutor(tmp_path / "shared-event.db", max_workers=1)
+	release = executor._context.Event()
+	process = executor._context.Process(target=_signal_process_event, args=(executor.sync_wakeup_event, release))
+	process.start()
+	try:
+		assert executor.sync_wakeup_event.wait(timeout=4)
+		assert process.is_alive()
+	finally:
+		release.set()
+		process.join(timeout=4)
+	assert process.exitcode == 0
 
 
 def test_process_worker_force_dry_run_overrides_destructive_request(tmp_path, monkeypatch):

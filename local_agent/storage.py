@@ -700,7 +700,11 @@ class LocalJobStore:
 					AND earlier.delivered_at IS NULL AND earlier.abandoned_at IS NULL
 					AND earlier.next_attempt_at > ?
 				)
-				ORDER BY current.created_at, current.rowid LIMIT ?
+				ORDER BY CASE current.kind
+					WHEN 'job_event' THEN 0
+					WHEN 'job_result' THEN 1
+					ELSE 2
+				END, current.created_at, current.rowid LIMIT ?
 				""",
 				(resolved_now, resolved_now, max(1, min(limit, 100))),
 			).fetchall()

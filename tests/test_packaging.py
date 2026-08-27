@@ -10,6 +10,7 @@ import stat
 import subprocess
 import tarfile
 import tomllib
+import zipfile
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -298,6 +299,25 @@ def test_release_builder_stages_the_native_gui_payload(tmp_path):
 	assert manifest["desktop_gui"] == {"enabled": True, "technology": "tauri", "port_8787_required": False}
 	source = (ROOT / "packaging/build_release.py").read_text(encoding="utf-8")
 	assert '"--features", "custom-protocol"' in source
+
+
+def test_release_wheel_validation_rejects_stale_sync_runtime_sources(tmp_path):
+	builder = _load_build_release()
+	wheel = tmp_path / "vyper_local_console-test.whl"
+	with zipfile.ZipFile(wheel, "w") as archive:
+		for relative in builder.LOCAL_AGENT_SYNC_RUNTIME_FILES:
+			archive.writestr(relative, (ROOT / relative).read_bytes())
+
+	hashes = builder.validate_local_agent_wheel_sources(wheel)
+	assert set(hashes) == set(builder.LOCAL_AGENT_SYNC_RUNTIME_FILES)
+	assert all(len(digest) == 64 for digest in hashes.values())
+
+	with zipfile.ZipFile(wheel, "w") as archive:
+		for relative in builder.LOCAL_AGENT_SYNC_RUNTIME_FILES:
+			content = b"stale" if relative == "local_agent/sync.py" else (ROOT / relative).read_bytes()
+			archive.writestr(relative, content)
+	with pytest.raises(RuntimeError, match="stale runtime source: local_agent/sync.py"):
+		builder.validate_local_agent_wheel_sources(wheel)
 
 
 def test_embedded_static_asset_validation_accepts_root_nested_and_loopback_compatible_paths(tmp_path):

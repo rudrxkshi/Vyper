@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import timedelta
 from typing import Any
 from uuid import uuid4
@@ -50,10 +51,17 @@ from ..security import record_audit_event, record_security_event
 
 
 router = APIRouter(tags=["agents"])
+logger = logging.getLogger("vyper.central.agent_sync")
 _TERMINAL = {"VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED", "REJECTED"}
 _OPERATOR_READ = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR, OperatorRole.AUDITOR, OperatorRole.VIEWER)
 _OPERATOR_WRITE = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN, OperatorRole.OPERATOR)
 _SECURITY_APPROVER = require_roles(OperatorRole.SUPER_ADMIN, OperatorRole.ADMIN, OperatorRole.SECURITY_ADMIN)
+
+
+def _central_sync_log(event: str, **fields: Any) -> None:
+	logger.info(json.dumps({
+		"timestamp": utc_now().isoformat().replace("+00:00", "Z"), "event": event, **fields,
+	}, sort_keys=True, separators=(",", ":")))
 
 
 def _index_accepted_sanitization_certificate(db: Session, job: CentralJobRecord, result: dict[str, Any]) -> None:
@@ -741,7 +749,15 @@ def get_central_job(central_job_id: str, principal: OperatorPrincipal = Depends(
 	if job is None:
 		raise HTTPException(status_code=404, detail="Central job not found.")
 	require_organization_access(db, principal, job.organization_id)
-	return _job_dict(job, db)
+	payload = _job_dict(job, db)
+	events = payload.get("events") or []
+	_central_sync_log(
+		"central_job_detail_returned", central_job_id=central_job_id, event_count=len(events),
+		last_event_sequence=events[-1]["sequence"] if events else None,
+		last_event_state=events[-1]["state"] if events else None,
+		final_status=payload.get("final_status"),
+	)
+	return payload
 
 
 @router.get("/agent/jobs/next")
@@ -886,6 +902,10 @@ def upload_event(central_job_id: str, payload: AgentJobEventUpload, agent: Agent
 	record_audit_event(db, actor=f"agent:{agent.agent_id}", action="JOB_EVENT_ACCEPTED", resource=f"central-job:{central_job_id}",
 		metadata={"local_job_id": payload.local_job_id, "sequence": payload.sequence, "state": payload.state}, organization_id=job.organization_id)
 	db.commit()
+	_central_sync_log(
+		"central_job_event_committed", central_job_id=central_job_id, local_job_id=payload.local_job_id,
+		sequence=payload.sequence, state=payload.state,
+	)
 	return {"accepted": True, "duplicate": False, "sequence": payload.sequence}
 
 

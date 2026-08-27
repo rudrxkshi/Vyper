@@ -28,6 +28,10 @@ ORPHANED_CENTRAL_JOB_DETAIL = "Central job not found for authenticated agent."
 logger = logging.getLogger(__name__)
 
 
+def _sync_log(event: str, **fields: Any) -> None:
+	logger.info(json.dumps({"timestamp": utc_now(), "event": event, **fields}, sort_keys=True, separators=(",", ":")))
+
+
 def _normalize_inventory_value(value: Any) -> Any:
 	"""Return a deterministic inventory representation without volatile data."""
 	if isinstance(value, dict):
@@ -346,11 +350,17 @@ class CentralSyncClient:
 				continue
 			for event in job["state_history"]:
 				payload = {"agent_protocol_version": AGENT_PROTOCOL_VERSION, "local_job_id": local_job_id, **event}
-				queued += int(self.job_store.enqueue_outbox(
+				inserted = self.job_store.enqueue_outbox(
 					outbox_id=str(uuid4()), kind="job_event", central_job_id=request["central_job_id"],
 					local_job_id=local_job_id, sequence=event["sequence"],
 					idempotency_key=f"event:{request['central_job_id']}:{event['sequence']}", payload=payload,
-				))
+				)
+				queued += int(inserted)
+				if inserted:
+					_sync_log(
+						"job_event_inserted_into_outbox", central_job_id=request["central_job_id"],
+						local_job_id=local_job_id, sequence=event["sequence"], state=event["state"],
+					)
 			if job["final_status"] is not None:
 				result_payload = {
 					"agent_protocol_version": AGENT_PROTOCOL_VERSION,
@@ -371,14 +381,21 @@ class CentralSyncClient:
 	def flush_outbox(self) -> int:
 		delivered = 0
 		blocked_job_streams: set[str] = set()
-		for message in self.job_store.due_outbox():
-			central_job_id = message.get("central_job_id")
-			is_job_stream = message.get("kind") in {"job_event", "job_result"} and bool(central_job_id)
-			if is_job_stream and central_job_id in blocked_job_streams:
-				continue
-			try:
-				method, path = self._outbox_destination(message)
-				with self._client() as client:
+		messages = self.job_store.due_outbox()
+		if not messages:
+			return 0
+		with self._client() as client:
+			for message in messages:
+				central_job_id = message.get("central_job_id")
+				is_job_stream = message.get("kind") in {"job_event", "job_result"} and bool(central_job_id)
+				if is_job_stream and central_job_id in blocked_job_streams:
+					continue
+				try:
+					method, path = self._outbox_destination(message)
+					_sync_log(
+						"outbox_post_started", kind=message["kind"], central_job_id=central_job_id,
+						local_job_id=message.get("local_job_id"), sequence=message.get("sequence"), path=path,
+					)
 					response = client.request(method, path, json=message["payload"])
 					if self._is_orphaned_central_job(message, response):
 						self.job_store.mark_outbox_abandoned(
@@ -391,23 +408,23 @@ class CentralSyncClient:
 						)
 						continue
 					response.raise_for_status()
-				self.job_store.mark_outbox_delivered(message["outbox_id"])
-				delivered += 1
-			except Exception as exc:
-				if is_job_stream:
-					blocked_job_streams.add(str(central_job_id))
-				status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-				detail = self._safe_central_detail(exc.response) if isinstance(exc, httpx.HTTPStatusError) else None
-				diagnostic = type(exc).__name__
-				if status_code is not None:
-					diagnostic += f" HTTP {status_code}"
-				if detail:
-					diagnostic += f": {detail}"
-				self.job_store.mark_outbox_failed(message["outbox_id"], diagnostic)
-				logger.warning(
-					"Outbox delivery failed kind=%s central_job_id=%s http_status=%s retryable=true detail=%s",
-					message["kind"], message.get("central_job_id"), status_code, detail or type(exc).__name__,
-				)
+					self.job_store.mark_outbox_delivered(message["outbox_id"])
+					delivered += 1
+				except Exception as exc:
+					if is_job_stream:
+						blocked_job_streams.add(str(central_job_id))
+					status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+					detail = self._safe_central_detail(exc.response) if isinstance(exc, httpx.HTTPStatusError) else None
+					diagnostic = type(exc).__name__
+					if status_code is not None:
+						diagnostic += f" HTTP {status_code}"
+					if detail:
+						diagnostic += f": {detail}"
+					self.job_store.mark_outbox_failed(message["outbox_id"], diagnostic)
+					logger.warning(
+						"Outbox delivery failed kind=%s central_job_id=%s http_status=%s retryable=true detail=%s",
+						message["kind"], message.get("central_job_id"), status_code, detail or type(exc).__name__,
+					)
 		return delivered
 
 	@staticmethod
@@ -551,4 +568,6 @@ class SyncLoop:
 				now=now, next_heartbeat=next_heartbeat, next_inventory=next_inventory,
 				next_job_poll=next_job_poll,
 			)
-			self.wakeup_event.wait(self.job_sync_interval_seconds)
+			signaled = self.wakeup_event.wait(self.job_sync_interval_seconds)
+			if signaled and not self.stop_event.is_set():
+				_sync_log("sync_worker_woke", trigger="milestone_signal")

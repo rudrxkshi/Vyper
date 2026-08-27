@@ -1149,6 +1149,88 @@ def test_intermediate_pipeline_events_queue_once_with_sequence_idempotency(tmp_p
 	assert len({item["idempotency_key"] for item in queued}) == len(queued)
 
 
+def test_outbox_flush_reuses_one_authenticated_client_for_the_ordered_batch(tmp_path, monkeypatch):
+	store = LocalJobStore(tmp_path / "outbox-client-reuse.db")
+	credential_store = AgentCredentialStore(tmp_path / "credential.json")
+	credential_store.save({"agent_id": "agent-1", "agent_token": "fixture-token", "agent_protocol_version": "1"})
+	for sequence in range(1, 4):
+		store.enqueue_outbox(
+			outbox_id=f"event-{sequence}", kind="job_event", central_job_id="central-1",
+			local_job_id="local-1", sequence=sequence,
+			idempotency_key=f"event:central-1:{sequence}",
+			payload={
+				"agent_protocol_version": "1", "local_job_id": "local-1", "sequence": sequence,
+				"state": f"STAGE_{sequence}", "timestamp": "2026-08-27T10:00:00Z",
+				"message": "Fixture milestone.", "progress": None,
+			},
+		)
+
+	class Response:
+		status_code = 200
+
+		def raise_for_status(self):
+			return None
+
+	class Client:
+		def __enter__(self):
+			return self
+
+		def __exit__(self, *_args):
+			return None
+
+		def request(self, method, path, json):
+			requests.append((method, path, json["sequence"]))
+			return Response()
+
+	sync = CentralSyncClient(
+		central_url="http://central.test", credential_store=credential_store, job_store=store,
+		discovery=DiscoveryStub([]), submit_local_job=lambda **kwargs: "local-1",
+	)
+	client_constructions = []
+	requests = []
+
+	def client_factory(*, authenticated=True):
+		client_constructions.append(authenticated)
+		return Client()
+
+	monkeypatch.setattr(sync, "_client", client_factory)
+	assert sync.flush_outbox() == 3
+	assert client_constructions == [True]
+	assert [sequence for _method, _path, sequence in requests] == [1, 2, 3]
+
+
+def test_empty_outbox_flush_does_not_require_an_enrolled_credential(tmp_path, monkeypatch):
+	sync = CentralSyncClient(
+		central_url="http://central.test", credential_store=AgentCredentialStore(tmp_path / "missing.json"),
+		job_store=LocalJobStore(tmp_path / "empty-outbox.db"), discovery=DiscoveryStub([]),
+		submit_local_job=lambda **kwargs: "unused",
+	)
+	monkeypatch.setattr(sync, "_client", lambda **_kwargs: pytest.fail("empty flush opened an HTTP client"))
+	assert sync.flush_outbox() == 0
+
+
+def test_new_job_milestone_is_not_starved_by_background_outbox_backlog(tmp_path):
+	store = LocalJobStore(tmp_path / "outbox-priority.db")
+	for index in range(50):
+		store.enqueue_outbox(
+			outbox_id=f"heartbeat-{index}", kind="heartbeat", idempotency_key=f"heartbeat:{index}",
+			payload={"agent_protocol_version": "1", "index": index},
+		)
+	store.enqueue_outbox(
+		outbox_id="execution-started", kind="job_event", central_job_id="central-active",
+		local_job_id="local-active", sequence=1, idempotency_key="event:central-active:1",
+		payload={
+			"agent_protocol_version": "1", "local_job_id": "local-active", "sequence": 1,
+			"state": "STAGE_EXECUTION_STARTED", "timestamp": "2026-08-27T10:00:00Z",
+			"message": "Execution started.", "progress": None,
+		},
+	)
+
+	due = store.due_outbox(limit=50)
+	assert due[0]["outbox_id"] == "execution-started"
+	assert len(due) == 50
+
+
 def test_sync_loop_isolates_poll_failure_and_continues_flushing_and_iterating(caplog, monkeypatch):
 	class Client:
 		def __init__(self):

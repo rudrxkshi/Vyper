@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from html.parser import HTMLParser
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,29 @@ from vyper_version import __version__
 ARTIFACT_NAME = f"vyper-local-console-linux-x86_64-{__version__}.tar.gz"
 PRODUCT = "VYPER Local Console"
 LOCAL_FRONTEND_API = "http://127.0.0.1:8765"
+LOCAL_AGENT_SYNC_RUNTIME_FILES = (
+	"local_agent/main.py",
+	"local_agent/sync.py",
+	"local_agent/storage.py",
+	"local_agent/jobs.py",
+	"local_agent/process_worker.py",
+)
+
+
+def validate_local_agent_wheel_sources(wheel: Path, *, source_root: Path = ROOT) -> dict[str, str]:
+	"""Prove the release wheel contains the exact current sync runtime sources."""
+	hashes: dict[str, str] = {}
+	with zipfile.ZipFile(wheel) as archive:
+		for relative in LOCAL_AGENT_SYNC_RUNTIME_FILES:
+			source = (source_root / relative).read_bytes()
+			try:
+				packaged = archive.read(relative)
+			except KeyError as exc:
+				raise RuntimeError(f"Release wheel is missing required runtime source: {relative}") from exc
+			if packaged != source:
+				raise RuntimeError(f"Release wheel contains stale runtime source: {relative}")
+			hashes[relative] = hashlib.sha256(source).hexdigest()
+	return hashes
 
 
 class _StaticAssetReferences(HTMLParser):
@@ -253,6 +277,10 @@ def build_release(*, output_dir: Path, skip_builds: bool = False, skip_frontend_
 				env=pip_environment,
 				check=True,
 			)
+			built_wheels = sorted(wheel_dir.glob("vyper_local_console-*.whl"))
+			if len(built_wheels) != 1:
+				raise RuntimeError("Release build did not produce exactly one VYPER local-console wheel.")
+			validate_local_agent_wheel_sources(built_wheels[0])
 		else:
 			(wheel_dir / f"vyper_local_console-{__version__}-py3-none-any.whl").write_bytes(b"test-wheel")
 
