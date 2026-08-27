@@ -4,6 +4,10 @@ Run `docker compose -f docker-compose.production.yml up --build`. Store the Post
 
 Production requires one `VYPER_DATABASE_URL` using `postgresql+psycopg://`; there is no SQLite fallback. The one-shot migration service runs `alembic upgrade head` before the non-root backend starts. Startup never calls `create_all` in production. Set `VYPER_METRICS_MODE=single-worker`; the built-in metrics registry is process-local and must not be deployed with multiple API workers. Bootstrap the first operator after migration with `python -m backend.app.admin_cli admin --role ADMIN` in a protected administrative shell.
 
+Provision Central's Ed25519 command-signing private key explicitly in production with `VYPER_COMMAND_SIGNING_PRIVATE_KEY_PEM`, `VYPER_COMMAND_SIGNING_PRIVATE_KEY_B64`, or a mode-0600 file named by `VYPER_COMMAND_SIGNING_PRIVATE_KEY_PATH`. Production never creates this key. Development Central creates one durable mode-0600 key at `$XDG_STATE_HOME/vyper/central-command-signing-key.pem` (or `~/.local/state/vyper/central-command-signing-key.pem`) and reuses it across reloads. Back up that state file securely and never add it to the repository.
+
+Agents enrolled before a command-signing identity change continue to trust their enrolled key and correctly reject commands signed by a different identity. VYPER has no authenticated command-key refresh protocol, so after establishing or deliberately rotating Central's key, revoke and explicitly re-enroll each affected agent with a new one-use enrollment token. Do not replace the trusted key in `agent-identity.json` manually and do not use unauthenticated trust-on-first-use replacement.
+
 Trust forwarded headers only from the private proxy network. Do not publish backend port 8000 or PostgreSQL. The privileged local storage agent is never part of these central containers.
 
 ## Local privilege boundary

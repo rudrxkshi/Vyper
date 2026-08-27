@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -21,7 +22,7 @@ from backend.app.main import create_app as create_central_app
 from backend.app.auth import OperatorPrincipal, OperatorRole, require_api_key
 from backend.app.models import AgentRecord, CentralJobRecord, EnrollmentTokenRecord, OrganizationMembershipRecord, UserRecord
 from local_agent.storage import LocalJobStore
-from local_agent.sync import AgentCredentialStore, CentralSyncClient, hardware_identity
+from local_agent.sync import AgentCredentialStore, CentralSyncClient, SyncLoop, hardware_identity
 from local_agent.identity import Ed25519IdentityStore, endpoint_identity_fingerprint
 from local_agent.command_verifier import verify_remote_command
 
@@ -32,6 +33,16 @@ class DiscoveryStub:
 
 	def discover(self):
 		return self.devices
+
+
+@pytest.fixture(autouse=True)
+def _isolated_central_command_signing_key(tmp_path, monkeypatch):
+	from backend.app import command_signing
+
+	monkeypatch.setenv("VYPER_COMMAND_SIGNING_PRIVATE_KEY_PATH", str(tmp_path / "central-command-key.pem"))
+	command_signing._private_key.cache_clear()
+	yield
+	command_signing._private_key.cache_clear()
 
 
 def _central_client(tmp_path):
@@ -936,6 +947,77 @@ def test_queued_job_result_payload_and_outbox_share_result_idempotency_key(tmp_p
 	expected = f"result:{central_job_id}"
 	assert result["idempotency_key"] == expected
 	assert result["payload"]["idempotency_key"] == expected
+
+
+def test_sync_loop_isolates_poll_failure_and_continues_flushing_and_iterating(caplog, monkeypatch):
+	class Client:
+		def __init__(self):
+			self.calls = []
+			self.pending_heartbeats = 0
+			self.delivered_heartbeats = 0
+
+		def queue_heartbeat(self):
+			self.calls.append("queue_heartbeat")
+			self.pending_heartbeats += 1
+
+		def queue_inventory(self):
+			self.calls.append("queue_inventory")
+
+		def poll_job(self):
+			self.calls.append("poll_job")
+			raise RuntimeError("command verification mismatch")
+
+		def queue_job_updates(self):
+			self.calls.append("queue_job_updates")
+
+		def flush_outbox(self):
+			self.calls.append("flush_outbox")
+			self.delivered_heartbeats += self.pending_heartbeats
+			self.pending_heartbeats = 0
+
+	client = Client()
+	loop = SyncLoop(client)
+	sync_logger = logging.getLogger("local_agent.sync")
+	monkeypatch.setattr(sync_logger, "disabled", False)
+	monkeypatch.setattr(sync_logger, "propagate", True)
+	caplog.set_level(logging.WARNING, logger="local_agent.sync")
+	next_heartbeat, next_inventory = loop._run_iteration(now=0.0, next_heartbeat=0.0, next_inventory=0.0)
+	loop._run_iteration(now=1.0, next_heartbeat=next_heartbeat, next_inventory=next_inventory)
+
+	assert client.calls[:5] == [
+		"queue_heartbeat", "queue_inventory", "poll_job", "queue_job_updates", "flush_outbox",
+	]
+	assert client.calls.count("poll_job") == 2
+	assert client.calls.count("queue_job_updates") == 2
+	assert client.calls.count("flush_outbox") == 2
+	assert client.delivered_heartbeats == 1
+	assert "operation=poll_job" in caplog.text
+	assert "exception=RuntimeError" in caplog.text
+
+
+def test_sync_loop_failure_logging_is_rate_limited_and_redacts_secrets(caplog, monkeypatch):
+	secret = "do-not-log-this-agent-token"
+
+	class Client:
+		queue_heartbeat = lambda self: None
+		queue_inventory = lambda self: None
+		queue_job_updates = lambda self: None
+		flush_outbox = lambda self: None
+
+		def poll_job(self):
+			raise RuntimeError(f"agent token {secret} signature invalid")
+
+	loop = SyncLoop(Client())
+	sync_logger = logging.getLogger("local_agent.sync")
+	monkeypatch.setattr(sync_logger, "disabled", False)
+	monkeypatch.setattr(sync_logger, "propagate", True)
+	caplog.set_level(logging.WARNING, logger="local_agent.sync")
+	loop._run_iteration(now=10.0, next_heartbeat=0.0, next_inventory=0.0)
+	loop._run_iteration(now=11.0, next_heartbeat=30.0, next_inventory=60.0)
+
+	assert caplog.text.count("operation=poll_job") == 1
+	assert "detail=Operation failed; exception detail omitted." in caplog.text
+	assert secret not in caplog.text
 
 
 def test_remote_destructive_request_requires_local_approval_and_revalidates_identity(tmp_path):

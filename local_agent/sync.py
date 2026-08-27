@@ -28,6 +28,28 @@ ORPHANED_CENTRAL_JOB_DETAIL = "Central job not found for authenticated agent."
 logger = logging.getLogger(__name__)
 
 
+def _safe_sync_error(exc: Exception) -> str:
+	if isinstance(exc, httpx.HTTPStatusError):
+		return f"Central returned HTTP {exc.response.status_code}."
+	if isinstance(exc, httpx.TimeoutException):
+		return "Central request timed out."
+	if isinstance(exc, httpx.RequestError):
+		return "Central request failed."
+	message = " ".join(str(exc).split()).strip()
+	if message.startswith("Remote command validation failed:"):
+		return "Remote command validation failed."
+	if message in {
+		"Local agent is not enrolled.",
+		"Central returned an incompatible agent protocol version.",
+		"Central job assignment did not contain a signed command.",
+		"Remote command identity does not match its job reference.",
+	}:
+		return message
+	if message.startswith("Remote command is missing required "):
+		return "Remote command is missing a required field."
+	return "Operation failed; exception detail omitted."
+
+
 class AgentCredentialStore:
 	def __init__(self, path: str | Path) -> None:
 		self.path = Path(path)
@@ -359,20 +381,20 @@ class CentralSyncClient:
 		)
 
 	def run_once(self) -> None:
-		try:
-			self.queue_heartbeat()
-		except Exception:
-			pass
-		try:
-			self.queue_inventory()
-		except Exception:
-			pass
-		try:
-			self.poll_job()
-		except Exception:
-			pass
-		self.queue_job_updates()
-		self.flush_outbox()
+		for operation, callback in (
+			("queue_heartbeat", self.queue_heartbeat),
+			("queue_inventory", self.queue_inventory),
+			("poll_job", self.poll_job),
+			("queue_job_updates", self.queue_job_updates),
+			("flush_outbox", self.flush_outbox),
+		):
+			try:
+				callback()
+			except Exception as exc:
+				logger.warning(
+					"Central sync operation failed operation=%s exception=%s detail=%s",
+					operation, type(exc).__name__, _safe_sync_error(exc),
+				)
 
 	def _outbox_destination(self, message: dict[str, Any]) -> tuple[str, str]:
 		if message["kind"] == "heartbeat":
@@ -413,6 +435,8 @@ class SyncLoop:
 		self.inventory_interval_seconds = max(self.interval_seconds, inventory_interval_seconds)
 		self.stop_event = threading.Event()
 		self.thread: threading.Thread | None = None
+		self._failure_log_times: dict[tuple[str, str, str], float] = {}
+		self.failure_log_interval_seconds = 60.0
 
 	def start(self) -> None:
 		if self.thread and self.thread.is_alive():
@@ -425,21 +449,38 @@ class SyncLoop:
 		if self.thread:
 			self.thread.join(timeout=2)
 
+	def _attempt(self, operation: str, callback: Callable[[], Any], *, now: float) -> bool:
+		try:
+			callback()
+			return True
+		except Exception as exc:
+			detail = _safe_sync_error(exc)
+			key = (operation, type(exc).__name__, detail)
+			last_logged = self._failure_log_times.get(key)
+			if last_logged is None or now - last_logged >= self.failure_log_interval_seconds:
+				logger.warning(
+					"Central sync operation failed operation=%s exception=%s detail=%s",
+					operation, type(exc).__name__, detail,
+				)
+				self._failure_log_times[key] = now
+			return False
+
+	def _run_iteration(self, *, now: float, next_heartbeat: float, next_inventory: float) -> tuple[float, float]:
+		if now >= next_heartbeat and self._attempt("queue_heartbeat", self.client.queue_heartbeat, now=now):
+			next_heartbeat = now + self.heartbeat_interval_seconds
+		if now >= next_inventory and self._attempt("queue_inventory", self.client.queue_inventory, now=now):
+			next_inventory = now + self.inventory_interval_seconds
+		self._attempt("poll_job", self.client.poll_job, now=now)
+		self._attempt("queue_job_updates", self.client.queue_job_updates, now=now)
+		self._attempt("flush_outbox", self.client.flush_outbox, now=now)
+		return next_heartbeat, next_inventory
+
 	def _run(self) -> None:
 		next_heartbeat = 0.0
 		next_inventory = 0.0
 		while not self.stop_event.is_set():
 			now = time.monotonic()
-			try:
-				if now >= next_heartbeat:
-					self.client.queue_heartbeat()
-					next_heartbeat = now + self.heartbeat_interval_seconds
-				if now >= next_inventory:
-					self.client.queue_inventory()
-					next_inventory = now + self.inventory_interval_seconds
-				self.client.poll_job()
-				self.client.queue_job_updates()
-				self.client.flush_outbox()
-			except Exception:
-				pass
+			next_heartbeat, next_inventory = self._run_iteration(
+				now=now, next_heartbeat=next_heartbeat, next_inventory=next_inventory,
+			)
 			self.stop_event.wait(self.interval_seconds)
