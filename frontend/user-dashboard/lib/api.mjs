@@ -187,6 +187,7 @@ export function createApiClient({
     listSecurityEvents: () => request("/security-events"),
     listAgentAssets: (agentId) => request(`/agents/${encodeURIComponent(agentId)}/assets`),
     listCentralJobs: () => request("/central-jobs"),
+    getCentralJob: (centralJobId) => request(`/central-jobs/${encodeURIComponent(centralJobId)}`),
     listDownloads: () => request("/downloads"),
     listRemoteJobs: () => request("/remote-jobs"),
     getSyncStatus: () => request("/sync/status"),

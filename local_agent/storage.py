@@ -635,14 +635,24 @@ class LocalJobStore:
 		return inserted.rowcount == 1
 
 	def due_outbox(self, *, now: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+		resolved_now = now or utc_now()
 		with self._connect() as connection:
 			rows = connection.execute(
 				"""
-				SELECT * FROM outbox
-				WHERE delivered_at IS NULL AND abandoned_at IS NULL AND next_attempt_at <= ?
-				ORDER BY created_at LIMIT ?
+				SELECT current.* FROM outbox AS current
+				WHERE current.delivered_at IS NULL AND current.abandoned_at IS NULL AND current.next_attempt_at <= ?
+				AND NOT EXISTS (
+					SELECT 1 FROM outbox AS earlier
+					WHERE current.kind IN ('job_event', 'job_result')
+					AND earlier.kind IN ('job_event', 'job_result')
+					AND earlier.central_job_id = current.central_job_id
+					AND earlier.rowid < current.rowid
+					AND earlier.delivered_at IS NULL AND earlier.abandoned_at IS NULL
+					AND earlier.next_attempt_at > ?
+				)
+				ORDER BY current.created_at, current.rowid LIMIT ?
 				""",
-				(now or utc_now(), max(1, min(limit, 100))),
+				(resolved_now, resolved_now, max(1, min(limit, 100))),
 			).fetchall()
 		return [{**dict(row), "payload": self._load(row["payload_json"])} for row in rows]
 

@@ -99,6 +99,15 @@ def _prepare_agent_asset_job(client, *, hostname="host-a", dry_run=False, idempo
 	return enrolled, headers, asset, job
 
 
+def test_central_job_create_returns_committed_canonical_id_for_immediate_detail_read(tmp_path):
+	with _central_client(tmp_path) as client:
+		_enrolled, _headers, _asset, created = _prepare_agent_asset_job(client, dry_run=True)
+		detail = client.get(f"/central-jobs/{created['central_job_id']}")
+	assert detail.status_code == 200
+	assert detail.json()["central_job_id"] == created["central_job_id"]
+	assert detail.json()["idempotency_key"] == created["idempotency_key"]
+
+
 def test_one_time_enrollment_token_is_hashed_expiring_and_single_use(tmp_path):
 	with _central_client(tmp_path) as client:
 		issued = client.post("/agents/enrollment-tokens", json={"ttl_seconds": 600}).json()
@@ -681,7 +690,7 @@ def test_central_persists_intermediate_pipeline_events_without_replacing_executi
 				"timestamp": "2026-08-24T10:00:01Z", "progress": None, **payloads[0],
 			},
 		)
-		stored = next(item for item in client.get("/central-jobs").json() if item["central_job_id"] == job["central_job_id"])
+		stored = client.get(f"/central-jobs/{job['central_job_id']}").json()
 
 	assert duplicate.json()["duplicate"] is True
 	assert [event["state"] for event in stored["events"]] == [item["state"] for item in payloads]
@@ -717,12 +726,15 @@ def test_final_result_is_structurally_checked_correlated_and_idempotent(tmp_path
 		payload = _verified_result()
 		first = client.post(f"/agent/jobs/{job['central_job_id']}/result", headers=headers, json=payload)
 		duplicate = client.post(f"/agent/jobs/{job['central_job_id']}/result", headers=headers, json=payload)
-		stored = client.get("/central-jobs").json()[0]
+		stored = client.get(f"/central-jobs/{job['central_job_id']}").json()
 		certificates = client.get("/certificates").json()
 	assert first.status_code == 200
 	assert duplicate.json()["duplicate"] is True
 	assert stored["local_job_id"] == "local-1"
+	assert stored["status"] == "VERIFIED"
 	assert stored["final_status"] == "VERIFIED"
+	assert stored["updated_at"] == stored["finished_at"]
+	assert stored["result"]["idempotency_key"] == payload["idempotency_key"]
 	assert len(certificates) == 1
 	assert certificates[0]["central_job_id"] == job["central_job_id"]
 	assert certificates[0]["local_job_id"] == payload["local_job_id"]
@@ -1018,6 +1030,31 @@ def test_successful_outbox_delivery_retains_accepted_semantics(tmp_path):
 	assert store.outbox_summary()["pending"] == 0
 
 
+def test_retryable_event_failure_blocks_later_result_without_losing_order(tmp_path):
+	calls = []
+
+	def handler(request):
+		calls.append(request.url.path)
+		return httpx.Response(500, json={"detail": "Temporary server failure."})
+
+	store, sync = _outbox_sync(tmp_path, handler)
+	store.enqueue_outbox(
+		outbox_id="event-first", kind="job_event", central_job_id="central-ordered", local_job_id="local-ordered",
+		sequence=1, idempotency_key="event:central-ordered:1", payload={"sequence": 1},
+	)
+	store.enqueue_outbox(
+		outbox_id="result-second", kind="job_result", central_job_id="central-ordered", local_job_id="local-ordered",
+		idempotency_key="result:central-ordered", payload={"final_status": "VERIFIED"},
+	)
+
+	assert sync.flush_outbox() == 0
+	assert calls == ["/agent/jobs/central-ordered/events"]
+	assert store.get_outbox_message("result-second")["attempt_count"] == 0
+	assert sync.flush_outbox() == 0
+	assert calls == ["/agent/jobs/central-ordered/events"]
+	assert store.outbox_summary()["pending"] == 2
+
+
 def test_existing_outbox_schema_is_upgraded_without_losing_pending_payload(tmp_path):
 	database = tmp_path / "legacy.db"
 	with sqlite3.connect(database) as connection:
@@ -1139,15 +1176,20 @@ def test_sync_loop_isolates_poll_failure_and_continues_flushing_and_iterating(ca
 	monkeypatch.setattr(sync_logger, "disabled", False)
 	monkeypatch.setattr(sync_logger, "propagate", True)
 	caplog.set_level(logging.WARNING, logger="local_agent.sync")
-	next_heartbeat, next_inventory = loop._run_iteration(now=0.0, next_heartbeat=0.0, next_inventory=0.0)
-	loop._run_iteration(now=1.0, next_heartbeat=next_heartbeat, next_inventory=next_inventory)
+	next_heartbeat, next_inventory, next_job_poll = loop._run_iteration(
+		now=0.0, next_heartbeat=0.0, next_inventory=0.0, next_job_poll=0.0,
+	)
+	loop._run_iteration(
+		now=1.0, next_heartbeat=next_heartbeat, next_inventory=next_inventory, next_job_poll=next_job_poll,
+	)
 
 	assert client.calls[:5] == [
 		"queue_heartbeat", "queue_inventory", "poll_job", "queue_job_updates", "flush_outbox",
 	]
-	assert client.calls.count("poll_job") == 2
+	assert client.calls.count("poll_job") == 1
 	assert client.calls.count("queue_job_updates") == 2
 	assert client.calls.count("flush_outbox") == 2
+	assert loop.job_sync_interval_seconds == 1.0
 	assert client.delivered_heartbeats == 1
 	assert "operation=poll_job" in caplog.text
 	assert "exception=RuntimeError" in caplog.text
@@ -1168,11 +1210,15 @@ def test_sync_loop_refreshes_inventory_on_existing_bounded_cadence():
 
 	client = Client()
 	loop = SyncLoop(client, interval_seconds=5, inventory_interval_seconds=60)
-	next_heartbeat, next_inventory = loop._run_iteration(
-		now=0.0, next_heartbeat=0.0, next_inventory=0.0,
+	next_heartbeat, next_inventory, next_job_poll = loop._run_iteration(
+		now=0.0, next_heartbeat=0.0, next_inventory=0.0, next_job_poll=0.0,
 	)
-	loop._run_iteration(now=59.0, next_heartbeat=next_heartbeat, next_inventory=next_inventory)
-	loop._run_iteration(now=60.0, next_heartbeat=next_heartbeat, next_inventory=next_inventory)
+	loop._run_iteration(
+		now=59.0, next_heartbeat=next_heartbeat, next_inventory=next_inventory, next_job_poll=next_job_poll,
+	)
+	loop._run_iteration(
+		now=60.0, next_heartbeat=next_heartbeat, next_inventory=next_inventory, next_job_poll=next_job_poll,
+	)
 
 	assert client.inventory_calls == 2
 
@@ -1194,8 +1240,10 @@ def test_sync_loop_failure_logging_is_rate_limited_and_redacts_secrets(caplog, m
 	monkeypatch.setattr(sync_logger, "disabled", False)
 	monkeypatch.setattr(sync_logger, "propagate", True)
 	caplog.set_level(logging.WARNING, logger="local_agent.sync")
-	loop._run_iteration(now=10.0, next_heartbeat=0.0, next_inventory=0.0)
-	loop._run_iteration(now=11.0, next_heartbeat=30.0, next_inventory=60.0)
+	_next_heartbeat, _next_inventory, next_job_poll = loop._run_iteration(
+		now=10.0, next_heartbeat=0.0, next_inventory=0.0, next_job_poll=0.0,
+	)
+	loop._run_iteration(now=11.0, next_heartbeat=30.0, next_inventory=60.0, next_job_poll=next_job_poll)
 
 	assert caplog.text.count("operation=poll_job") == 1
 	assert "detail=Operation failed; exception detail omitted." in caplog.text

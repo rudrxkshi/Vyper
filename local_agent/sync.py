@@ -339,7 +339,12 @@ class CentralSyncClient:
 
 	def flush_outbox(self) -> int:
 		delivered = 0
+		blocked_job_streams: set[str] = set()
 		for message in self.job_store.due_outbox():
+			central_job_id = message.get("central_job_id")
+			is_job_stream = message.get("kind") in {"job_event", "job_result"} and bool(central_job_id)
+			if is_job_stream and central_job_id in blocked_job_streams:
+				continue
 			try:
 				method, path = self._outbox_destination(message)
 				with self._client() as client:
@@ -358,6 +363,8 @@ class CentralSyncClient:
 				self.job_store.mark_outbox_delivered(message["outbox_id"])
 				delivered += 1
 			except Exception as exc:
+				if is_job_stream:
+					blocked_job_streams.add(str(central_job_id))
 				status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
 				detail = self._safe_central_detail(exc.response) if isinstance(exc, httpx.HTTPStatusError) else None
 				diagnostic = type(exc).__name__
@@ -439,11 +446,13 @@ class SyncLoop:
 		client: CentralSyncClient,
 		*,
 		interval_seconds: float = 5.0,
+		job_sync_interval_seconds: float = 1.0,
 		heartbeat_interval_seconds: float = 30.0,
 		inventory_interval_seconds: float = 60.0,
 	) -> None:
 		self.client = client
 		self.interval_seconds = max(2.0, interval_seconds)
+		self.job_sync_interval_seconds = max(0.5, job_sync_interval_seconds)
 		self.heartbeat_interval_seconds = max(self.interval_seconds, heartbeat_interval_seconds)
 		self.inventory_interval_seconds = max(self.interval_seconds, inventory_interval_seconds)
 		self.stop_event = threading.Event()
@@ -478,22 +487,28 @@ class SyncLoop:
 				self._failure_log_times[key] = now
 			return False
 
-	def _run_iteration(self, *, now: float, next_heartbeat: float, next_inventory: float) -> tuple[float, float]:
+	def _run_iteration(
+		self, *, now: float, next_heartbeat: float, next_inventory: float, next_job_poll: float,
+	) -> tuple[float, float, float]:
 		if now >= next_heartbeat and self._attempt("queue_heartbeat", self.client.queue_heartbeat, now=now):
 			next_heartbeat = now + self.heartbeat_interval_seconds
 		if now >= next_inventory and self._attempt("queue_inventory", self.client.queue_inventory, now=now):
 			next_inventory = now + self.inventory_interval_seconds
-		self._attempt("poll_job", self.client.poll_job, now=now)
+		if now >= next_job_poll:
+			self._attempt("poll_job", self.client.poll_job, now=now)
+			next_job_poll = now + self.interval_seconds
 		self._attempt("queue_job_updates", self.client.queue_job_updates, now=now)
 		self._attempt("flush_outbox", self.client.flush_outbox, now=now)
-		return next_heartbeat, next_inventory
+		return next_heartbeat, next_inventory, next_job_poll
 
 	def _run(self) -> None:
 		next_heartbeat = 0.0
 		next_inventory = 0.0
+		next_job_poll = 0.0
 		while not self.stop_event.is_set():
 			now = time.monotonic()
-			next_heartbeat, next_inventory = self._run_iteration(
+			next_heartbeat, next_inventory, next_job_poll = self._run_iteration(
 				now=now, next_heartbeat=next_heartbeat, next_inventory=next_inventory,
+				next_job_poll=next_job_poll,
 			)
-			self.stop_event.wait(self.interval_seconds)
+			self.stop_event.wait(self.job_sync_interval_seconds)

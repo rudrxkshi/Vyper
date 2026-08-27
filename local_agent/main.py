@@ -76,6 +76,7 @@ def create_app(
 			app.state.sync_loop = SyncLoop(
 				sync_client,
 				interval_seconds=float(os.getenv("VYPER_CENTRAL_POLL_SECONDS", "5")),
+				job_sync_interval_seconds=float(os.getenv("VYPER_JOB_SYNC_SECONDS", "1")),
 				heartbeat_interval_seconds=float(os.getenv("VYPER_HEARTBEAT_INTERVAL", "30")),
 				inventory_interval_seconds=float(os.getenv("VYPER_INVENTORY_INTERVAL", "60")),
 			)

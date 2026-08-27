@@ -29,12 +29,16 @@ import {
   getPipelinePresentation,
   getProgressPresentation,
   mountedPartitionsText,
+  mergeCentralJobList,
   normalizeDiscoveredDevices,
   normalizeCentralJob,
   normalizeLocalJob,
   remoteAssetsForJob,
   normalizeRemoteAgent,
+  preferCentralJobSnapshot,
+  shouldPollCentralJob,
   shouldPollLocalJob,
+  upsertCentralJob,
 } from "../lib/presentation.mjs";
 import { loadLocalConsoleData } from "../lib/local-console-data.mjs";
 import { releaseDownloadUrl, selectLinuxX64Release } from "../lib/downloads.mjs";
@@ -680,6 +684,58 @@ test("new pending remote requests survive refresh beside older submitted request
   const source = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
   assert.match(source, /setInterval\(\(\) => refreshDashboardData\(\), 8000\)/);
   assert.match(source, /request\.status === "WAITING_LOCAL_APPROVAL"/);
+});
+
+test("central job detail uses the dedicated canonical central-job endpoint", async () => {
+  let requestedUrl;
+  const client = createApiClient({
+    baseUrl: "https://central.example",
+    fetchImpl: async (url) => {
+      requestedUrl = url;
+      return new Response(JSON.stringify({ central_job_id: "central/job" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await client.getCentralJob("central/job");
+  assert.equal(requestedUrl, "https://central.example/central-jobs/central%2Fjob");
+});
+
+test("central selected-job snapshots advance progressively and stop polling at terminal state", () => {
+  const profiling = normalizeCentralJob({
+    central_job_id: "central-1", status: "RUNNING", updated_at: "2026-08-27T10:00:00Z",
+    events: [{ sequence: 1, state: "STAGE_PROFILING_STARTED" }],
+  });
+  const policy = normalizeCentralJob({
+    central_job_id: "central-1", status: "RUNNING", updated_at: "2026-08-27T10:00:01Z",
+    events: [
+      { sequence: 1, state: "STAGE_PROFILING_STARTED" },
+      { sequence: 2, state: "STAGE_PROFILING_COMPLETED" },
+      { sequence: 3, state: "STAGE_POLICY_STARTED" },
+    ],
+  });
+  const terminal = normalizeCentralJob({
+    central_job_id: "central-1", status: "VERIFIED", final_status: "VERIFIED",
+    updated_at: "2026-08-27T10:00:02Z", events: policy.events,
+  });
+
+  let jobs = upsertCentralJob([], profiling);
+  assert.equal(shouldPollCentralJob(jobs[0]), true);
+  jobs = upsertCentralJob(jobs, policy);
+  assert.deepEqual(pipelineStatuses(jobs[0].state_history_json.map((event) => event.state)), ["done", "current", "pending", "pending", "pending", "pending"]);
+  assert.equal(preferCentralJobSnapshot(policy, profiling), policy);
+  jobs = upsertCentralJob(jobs, terminal);
+  assert.equal(shouldPollCentralJob(jobs[0]), false);
+
+  const listSnapshot = mergeCentralJobList(jobs, [profiling]);
+  assert.equal(listSnapshot[0].final_status, "VERIFIED");
+
+  const source = readFileSync(new URL("../app/page.js", import.meta.url), "utf8");
+  assert.match(source, /window\.setInterval\(poll, 1000\)/);
+  assert.match(source, /const created = normalizeCentralJob\(await apiClient\.createCentralJob/);
+  assert.match(source, /setSelectedJobId\(created\.id\)/);
+  assert.doesNotMatch(source, /await apiClient\.createCentralJob[\s\S]{0,800}await refreshDashboardData/);
 });
 
 test("local export uses Tauri-compatible assets without changing central defaults", () => {

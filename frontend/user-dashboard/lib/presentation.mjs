@@ -293,6 +293,42 @@ export function normalizeCentralJob(job) {
   };
 }
 
+export function shouldPollCentralJob(job) {
+  return Boolean(job?.central_job_id)
+    && !["VERIFIED", "FAILED", "INCONCLUSIVE", "UNSUPPORTED", "CANCELLED", "EXPIRED", "REJECTED"]
+      .includes(job.final_status || job.status);
+}
+
+function centralJobSnapshotRank(job) {
+  const updatedAt = Date.parse(job?.updated_at || "") || 0;
+  const eventCount = Array.isArray(job?.events) ? job.events.length : 0;
+  return [updatedAt, eventCount];
+}
+
+export function preferCentralJobSnapshot(current, incoming) {
+  if (!current) return incoming;
+  const [currentUpdated, currentEvents] = centralJobSnapshotRank(current);
+  const [incomingUpdated, incomingEvents] = centralJobSnapshotRank(incoming);
+  if (incomingUpdated < currentUpdated) return current;
+  if (incomingUpdated === currentUpdated && incomingEvents < currentEvents) return current;
+  return incoming;
+}
+
+export function upsertCentralJob(jobs = [], incoming) {
+  const existing = jobs.find((job) => job.id === incoming.id);
+  const preferred = preferCentralJobSnapshot(existing, incoming);
+  if (!existing) return [preferred, ...jobs];
+  return jobs.map((job) => job.id === incoming.id ? preferred : job);
+}
+
+export function mergeCentralJobList(current = [], incoming = []) {
+  const incomingIds = new Set(incoming.map((job) => job.id));
+  const merged = incoming.map((job) =>
+    preferCentralJobSnapshot(current.find((existing) => existing.id === job.id), job)
+  );
+  return [...merged, ...current.filter((job) => !incomingIds.has(job.id))];
+}
+
 export function auditLogsForJob(job, auditLogs = []) {
   if (!job) return [];
   if (job.central_job_id) {

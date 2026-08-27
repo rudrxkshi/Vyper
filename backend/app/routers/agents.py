@@ -735,6 +735,15 @@ def list_central_jobs(principal: OperatorPrincipal = Depends(_OPERATOR_READ), db
 	return [_job_dict(job, db) for job in db.execute(query).scalars()]
 
 
+@router.get("/central-jobs/{central_job_id}", dependencies=[Depends(_OPERATOR_READ)])
+def get_central_job(central_job_id: str, principal: OperatorPrincipal = Depends(_OPERATOR_READ), db: Session = Depends(get_db)):
+	job = db.get(CentralJobRecord, central_job_id)
+	if job is None:
+		raise HTTPException(status_code=404, detail="Central job not found.")
+	require_organization_access(db, principal, job.organization_id)
+	return _job_dict(job, db)
+
+
 @router.get("/agent/jobs/next")
 def claim_next_job(response: Response, agent: AgentRecord = Depends(authenticated_agent), db: Session = Depends(get_db)):
 	now = utc_now()

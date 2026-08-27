@@ -32,12 +32,15 @@ import {
   getPipelinePresentation,
   getProgressPresentation,
   mountedPartitionsText,
+  mergeCentralJobList,
   normalizeDiscoveredDevices,
   normalizeCentralJob,
   normalizeLocalJob,
   normalizeRemoteAgent,
   remoteAssetsForJob,
+  shouldPollCentralJob,
   shouldPollLocalJob,
+  upsertCentralJob,
 } from "../lib/presentation.mjs";
 import { loadLocalConsoleData } from "../lib/local-console-data.mjs";
 import { selectLinuxX64Release } from "../lib/downloads.mjs";
@@ -179,6 +182,10 @@ export default function VyperDashboard() {
     [apiUrl, apiKey, localMode],
   );
 
+  const selectedJob = jobs.find((job) => job.id === selectedJobId) || null;
+  const selectedCentralJobId = selectedJob?.central_job_id;
+  const pollSelectedCentralJob = shouldPollCentralJob(selectedJob);
+
   const refreshDashboardData = useCallback(async ({ showLoading = false } = {}) => {
     if (showLoading) setLoading(true);
     setDataError("");
@@ -245,7 +252,10 @@ export default function VyperDashboard() {
         assetsData = persistedAssets;
         const normalizedCentralJobs = centralJobsData.map(normalizeCentralJob);
         const allJobs = [...jobsData, ...normalizedCentralJobs];
-        setJobs(allJobs);
+        setJobs((current) => [
+          ...jobsData,
+          ...mergeCentralJobList(current.filter((job) => job.central_job_id), normalizedCentralJobs),
+        ]);
         setSelectedJobId((current) =>
           allJobs.some((job) => job.id === current) ? current : allJobs[0]?.id || null,
         );
@@ -258,7 +268,7 @@ export default function VyperDashboard() {
         setAuditLogs(auditData);
         const normalizedAgents = agentsData.map(normalizeRemoteAgent);
         setRemoteAgents(normalizedAgents);
-        setCentralJobs(normalizedCentralJobs);
+        setCentralJobs((current) => mergeCentralJobList(current, normalizedCentralJobs));
         setOrganizations(organizationsData);
         setRemotePolicies(policiesData);
         setSecurityEvents(securityEventsData);
@@ -327,6 +337,13 @@ export default function VyperDashboard() {
     }
   }, [apiClient, localMode]);
 
+  const loadCentralJobDetail = useCallback(async (centralJobId) => {
+    const jobData = normalizeCentralJob(await apiClient.getCentralJob(centralJobId));
+    setCentralJobs((current) => upsertCentralJob(current, jobData));
+    setJobs((current) => upsertCentralJob(current, jobData));
+    return jobData;
+  }, [apiClient]);
+
   useEffect(() => {
     if (!localMode || screen !== "jobdetail" || !selectedJobId) return undefined;
     const selected = jobs.find((job) => job.id === selectedJobId);
@@ -334,6 +351,35 @@ export default function VyperDashboard() {
     const pollId = window.setInterval(() => loadJobDetail(selectedJobId), 1000);
     return () => window.clearInterval(pollId);
   }, [jobs, loadJobDetail, localMode, screen, selectedJobId]);
+
+  useEffect(() => {
+    if (localMode || screen !== "jobdetail" || !selectedCentralJobId || !pollSelectedCentralJob) {
+      return undefined;
+    }
+    let cancelled = false;
+    let consecutiveNotFound = 0;
+    let pollId;
+    const poll = async () => {
+      try {
+        const job = await loadCentralJobDetail(selectedCentralJobId);
+        consecutiveNotFound = 0;
+        if (!shouldPollCentralJob(job) && pollId) window.clearInterval(pollId);
+      } catch (error) {
+        if (cancelled) return;
+        if (error?.status === 404 && consecutiveNotFound < 2) {
+          consecutiveNotFound += 1;
+          return;
+        }
+        setDataError(formatApiError(error));
+      }
+    };
+    void poll();
+    pollId = window.setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+    };
+  }, [loadCentralJobDetail, localMode, pollSelectedCentralJob, screen, selectedCentralJobId]);
 
   useEffect(() => {
     if (localMode || screen !== "downloads" || !operatorUser || mfaRequired) return undefined;
@@ -360,7 +406,9 @@ export default function VyperDashboard() {
       if (localMode) saveLocalJobId(window.localStorage, opts.jobId);
 
       if (screenId === "jobdetail") {
-        loadJobDetail(opts.jobId);
+        if (!opts.centralJobId) {
+          loadJobDetail(opts.jobId);
+        }
       }
     }
 
@@ -429,7 +477,6 @@ export default function VyperDashboard() {
   const selectedTargetProtection = getDeviceProtection(selectedTargetDevice);
 
   const filteredJobs = jobs.filter((j) => jobStateFilter === "All" || j.job_state === jobStateFilter);
-  const selectedJob = jobs.find((j) => j.id === selectedJobId) || null;
   const selectedJobProgress = getProgressPresentation(selectedJob?.progress);
 
   const selectedCert = certs.find((c) => c.id === selectedCertId) || null;
@@ -470,7 +517,7 @@ export default function VyperDashboard() {
     }
     setRemoteJobError("");
     try {
-      await apiClient.createCentralJob(selectedAgentId, {
+      const created = normalizeCentralJob(await apiClient.createCentralJob(selectedAgentId, {
         asset_id: remoteJobForm.assetId,
         dry_run: remoteJobForm.dryRun,
         central_authorized: remoteJobForm.authorized,
@@ -479,8 +526,11 @@ export default function VyperDashboard() {
         expires_in_seconds: 3600,
         execution_mode: remoteJobForm.executionMode,
         policy_id: selectedRemotePolicy?.id || null,
-      });
-      await refreshDashboardData();
+      }));
+      setCentralJobs((current) => upsertCentralJob(current, created));
+      setJobs((current) => upsertCentralJob(current, created));
+      setSelectedJobId(created.id);
+      setScreen("jobdetail");
     } catch (error) {
       setRemoteJobError(formatApiError(error));
     }
@@ -664,7 +714,7 @@ export default function VyperDashboard() {
                         const meta = getJobStateMeta(j.job_state);
                         const finalMeta = getFinalStatusMeta(j.final_status);
                         return (
-                          <tr key={j.id} className="nb-row" onClick={() => goto("jobdetail", { jobId: j.id })}>
+                          <tr key={j.id} className="nb-row" onClick={() => goto("jobdetail", { jobId: j.id, centralJobId: j.central_job_id })}>
                             <td className="strong nb-mono">{j.target}</td>
                             <td><Badge tone={meta.tone}>{meta.label}</Badge></td>
                             <td><Badge tone={finalMeta.tone}>{finalMeta.label}</Badge></td>
@@ -989,7 +1039,7 @@ export default function VyperDashboard() {
                         const meta = getJobStateMeta(j.job_state);
                         const finalMeta = getFinalStatusMeta(j.final_status);
                         return (
-                          <tr key={j.id} className="nb-row" onClick={() => goto("jobdetail", { jobId: j.id })}>
+                          <tr key={j.id} className="nb-row" onClick={() => goto("jobdetail", { jobId: j.id, centralJobId: j.central_job_id })}>
                             <td className="strong nb-mono">{j.target}</td>
                             <td>{j.pathway}</td>
                             <td><Badge tone={meta.tone}>{meta.label}</Badge></td>
